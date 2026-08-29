@@ -670,7 +670,7 @@
 
   function launchApp(e) {
     if (e) e.preventDefault();
-    window.open(TARGET_URL, '_blank') || (window.location.href = TARGET_URL);
+    window.location.href = TARGET_URL;
   }
 
   function injectLaunchButton() {
@@ -726,8 +726,7 @@
     btn.id = 'hero-launch-app-btn';
     btn.className = 'launch-guardrail-cta-btn';
     btn.href = TARGET_URL;
-    btn.target = '_blank';
-    btn.rel = 'noopener noreferrer';
+    btn.target = '_self';
     btn.setAttribute('data-framer-name', 'Launch Controller');
     btn.textContent = 'Launch Guardrail Controller';
 
@@ -759,6 +758,173 @@
   }, 300);
 
   injectLaunchButton();
+})();
+</script>
+
+<style id="smooth-scroll-reveal-styles">
+  /* Smooth container & row reveal without DOM text node mutation */
+  .smooth-card-reveal,
+  .smooth-row-reveal,
+  .smooth-header-reveal {
+    opacity: 0 !important;
+    transform: translateY(22px) !important;
+    transition: opacity 0.65s cubic-bezier(0.16, 1, 0.3, 1), transform 0.65s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    will-change: opacity, transform !important;
+  }
+
+  .smooth-card-reveal.is-revealed,
+  .smooth-row-reveal.is-revealed,
+  .smooth-header-reveal.is-revealed {
+    opacity: 1 !important;
+    transform: translateY(0) !important;
+  }
+
+  /* Preserve table row pair height consistency and alignment */
+  .framer-1dh0lia > div,
+  .framer-13cow0d > div {
+    box-sizing: border-box !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .smooth-card-reveal,
+    .smooth-row-reveal,
+    .smooth-header-reveal {
+      opacity: 1 !important;
+      transform: none !important;
+      transition: none !important;
+    }
+  }
+</style>
+
+<script id="smooth-scroll-reveal-engine">
+(function() {
+  function setupScrollRevealEngine() {
+    // 0. Replace outdated template copy with distinct failure-mode copy
+    (function replaceOutdatedCopy() {
+      const headings = document.querySelectorAll('.framer-sa5664 h2');
+      headings.forEach(h2 => {
+        if (h2.textContent.includes('Recall degradation') || h2.textContent.includes('Uncontrolled AI Spending')) {
+          h2.textContent = 'Why Uncontrolled Agent Commerce Fails At Scale';
+        }
+      });
+
+      const paras = document.querySelectorAll('.framer-sa5664 p');
+      paras.forEach(p => {
+        if (p.textContent.includes('Embeddings hit') || p.textContent.includes('Unrestricted AI agents execute probabilistic')) {
+          p.textContent = 'Sub-second race conditions cause double-charging when multiple agents order concurrently';
+        } else if (p.textContent.includes('VectorDBs are stateless') || p.textContent.includes('Traditional APIs and payment gateways')) {
+          p.textContent = 'Runaway loop bugs drain corporate wallets in seconds without real-time TTL session caps';
+        } else if (p.textContent.includes('Current systems are stitched') || p.textContent.includes('Naive API keys lack sequence-locked')) {
+          p.textContent = 'Black-box tool calls lack cryptographic verification, breaking compliance & auditability';
+        }
+      });
+
+      const h3s = document.querySelectorAll('.framer-sa5664 h3');
+      h3s.forEach(h3 => {
+        if (h3.textContent.includes('Accuracy vs Context') || h3.textContent.includes('Financial Safety vs Concurrency')) {
+          h3.textContent = 'Financial Security vs Concurrency Scale';
+        } else if (h3.textContent.trim() === 'VectorDB') {
+          h3.textContent = 'Unprotected Gateway';
+        }
+      });
+    })();
+
+    // 1. Process Section Headers
+    const useCaseHeader = document.querySelector('.framer-11k7vjq');
+    if (useCaseHeader && !useCaseHeader.classList.contains('smooth-header-reveal')) {
+      useCaseHeader.classList.add('smooth-header-reveal');
+      useCaseHeader.style.transitionDelay = '0s';
+    }
+
+    const guaranteeHeader = document.querySelector('.framer-18hj82w');
+    if (guaranteeHeader && !guaranteeHeader.classList.contains('smooth-header-reveal')) {
+      guaranteeHeader.classList.add('smooth-header-reveal');
+      guaranteeHeader.style.transitionDelay = '0s';
+    }
+
+    // 2. Process Use Cases Grid Section Cards (Image 1)
+    const useCaseContainer = document.querySelector('.framer-al9tq9');
+    if (useCaseContainer) {
+      const grid = useCaseContainer.querySelector('div');
+      if (grid) {
+        const cards = Array.from(grid.children);
+        cards.forEach((card, index) => {
+          if (!card.classList.contains('smooth-card-reveal')) {
+            card.classList.add('smooth-card-reveal');
+            card.style.transitionDelay = (index * 0.08) + 's';
+          }
+        });
+      }
+    }
+
+    // 3. Process Comparison Table Section Rows (Image 2)
+    const leftCol = document.querySelector('.framer-1dh0lia');
+    const rightCol = document.querySelector('.framer-13cow0d');
+
+    if (leftCol && rightCol) {
+      const leftRows = Array.from(leftCol.children);
+      const rightRows = Array.from(rightCol.children);
+      const maxRows = Math.max(leftRows.length, rightRows.length);
+
+      for (let i = 0; i < maxRows; i++) {
+        const delay = (i * 0.1) + 's';
+
+        if (leftRows[i] && !leftRows[i].classList.contains('smooth-row-reveal')) {
+          leftRows[i].classList.add('smooth-row-reveal');
+          leftRows[i].style.transitionDelay = delay;
+        }
+
+        if (rightRows[i] && !rightRows[i].classList.contains('smooth-row-reveal')) {
+          rightRows[i].classList.add('smooth-row-reveal');
+          rightRows[i].style.transitionDelay = delay;
+        }
+      }
+    }
+
+    // 4. Set up IntersectionObserver to trigger smooth reveals on scroll
+    const observerOptions = {
+      root: null,
+      rootMargin: '0px 0px -40px 0px',
+      threshold: 0.08
+    };
+
+    const observer = new IntersectionObserver((entries, obs) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('is-revealed');
+          obs.unobserve(entry.target);
+        }
+      });
+    }, observerOptions);
+
+    const items = document.querySelectorAll('.smooth-card-reveal, .smooth-row-reveal, .smooth-header-reveal');
+    items.forEach(item => {
+      const rect = item.getBoundingClientRect();
+      if (rect.top < window.innerHeight && rect.bottom > 0) {
+        item.classList.add('is-revealed');
+      } else {
+        observer.observe(item);
+      }
+    });
+  }
+
+  const mutationObs = new MutationObserver(() => {
+    setupScrollRevealEngine();
+  });
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setupScrollRevealEngine();
+      mutationObs.observe(document.body, { childList: true, subtree: true });
+    });
+  } else {
+    setupScrollRevealEngine();
+    if (document.body) {
+      mutationObs.observe(document.body, { childList: true, subtree: true });
+    }
+  }
+
+  setInterval(setupScrollRevealEngine, 400);
 })();
 </script>
 

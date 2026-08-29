@@ -73,9 +73,11 @@ export default function Home() {
     };
   }, []);
 
+  const [adminApiKey, setAdminApiKey] = useState('admin_api_key_default');
+
   const UI_AUTH_HEADERS = {
     'Content-Type': 'application/json',
-    'X-API-Key': process.env.NEXT_PUBLIC_ADMIN_API_KEY || 'admin_api_key_default',
+    'X-API-Key': adminApiKey,
   };
 
   const fetchInitialData = async () => {
@@ -121,6 +123,93 @@ export default function Home() {
     }
   };
 
+  // Trigger Razorpay Checkout modal
+  const triggerRazorpayCheckout = (orderId: string, amountPaise: number, merchantName: string) => {
+    // If running without real Razorpay keys, the backend issues a mock order ID.
+    // The real Razorpay UI will crash if fed a fake key/order, so we handle it gracefully here.
+    if (orderId.startsWith('order_test_mock_')) {
+      alert(`[Dev Mode] Guardrail Approved!\n\nMock Order ID: ${orderId}\nAmount: ₹${(amountPaise / 100).toFixed(2)}\n\n(In production with real API keys, the Razorpay payment modal would open here)`);
+      
+      // Simulate a successful verification webhook call
+      fetch('/api/verify-payment', {
+        method: 'POST',
+        headers: UI_AUTH_HEADERS,
+        body: JSON.stringify({
+          razorpay_order_id: orderId,
+          razorpay_payment_id: `pay_mock_${Date.now()}`,
+          razorpay_signature: 'mock_dev_signature_skip'
+        }),
+      }).then(res => res.json()).then(data => {
+        if (data.updatedReserveState) setReserveState(data.updatedReserveState);
+        fetchInitialData();
+      }).catch(console.error);
+      
+      return;
+    }
+
+    const RazorpayClass = (window as unknown as { Razorpay: new (options: Record<string, unknown>) => { open: () => void } }).Razorpay;
+    if (!RazorpayClass) {
+      console.error('Razorpay SDK failed to load.');
+      alert('Payment gateway failed to load. Please disable ad-blockers and try again.');
+      return;
+    }
+    try {
+      const options = {
+        key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_dev_key',
+        amount: amountPaise,
+        currency: 'INR',
+        name: 'Reserve Pay Guardrail',
+        description: `Purchase from ${merchantName}`,
+        order_id: orderId,
+        modal: {
+          ondismiss: async function () {
+            console.log('Checkout modal closed/dismissed. Releasing 2PC reservation.');
+            try {
+              await fetch('/api/release', {
+                method: 'POST',
+                headers: UI_AUTH_HEADERS,
+                body: JSON.stringify({ orderId: orderId, reason: 'Checkout modal cancelled by user' }),
+              });
+              fetchInitialData();
+            } catch (releaseErr) {
+              console.error('Failed to release reservation:', releaseErr);
+            }
+          },
+        },
+        handler: async function (response: Record<string, unknown>) {
+          console.log('Razorpay payment authorized successfully:', response);
+          try {
+            const verifyRes = await fetch('/api/verify-payment', {
+              method: 'POST',
+              headers: UI_AUTH_HEADERS,
+              body: JSON.stringify(response),
+            });
+            const verifyData = await verifyRes.json();
+            if (verifyData.updatedReserveState) {
+              setReserveState(verifyData.updatedReserveState);
+            } else {
+              fetchInitialData();
+            }
+          } catch (verifyErr) {
+            console.error('Failed to verify Razorpay payment:', verifyErr);
+          }
+        },
+        prefill: {
+          name: 'Reserve Pay User',
+          email: 'user@example.com',
+          contact: '9999999999',
+        },
+        theme: {
+          color: '#FF571A',
+        },
+      };
+      const rzp = new RazorpayClass(options);
+      rzp.open();
+    } catch (checkoutErr) {
+      console.warn('Razorpay Checkout UI initialization error:', checkoutErr);
+    }
+  };
+
   // 2. Submit Attempted Purchase (/api/purchase) - Converts INR input to integer Paise
   const handleSimulatePurchase = async (
     e?: React.FormEvent,
@@ -135,9 +224,10 @@ export default function Home() {
         alert('Please enter a valid positive amount in ₹ (e.g. 550.00)');
         return;
       }
+      const exactAmount = Number(cleanAmount.toFixed(2));
       payload = {
         merchant: simMerchant.trim() || 'Swiggy',
-        amount: Math.round(cleanAmount * 100), // Convert INR to integer Paise
+        amount: Math.round(exactAmount * 100), // Convert INR to integer Paise
         category: simCategory.trim() || 'Groceries',
         quantity: parseInt(simQuantity, 10) || 1,
       };
@@ -159,70 +249,10 @@ export default function Home() {
       if (
         data.decision === 'approve' &&
         data.razorpayOrderId &&
-        typeof window !== 'undefined'
+        typeof window !== 'undefined' &&
+        !isDemoRunning
       ) {
-        const RazorpayClass = (window as unknown as { Razorpay: new (options: Record<string, unknown>) => { open: () => void } }).Razorpay;
-        if (!RazorpayClass) {
-          console.error('Razorpay SDK failed to load.');
-          alert('Payment gateway failed to load. Please disable ad-blockers and try again.');
-          return data;
-        }
-        try {
-          const options = {
-            key: process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || 'rzp_test_dev_key',
-            amount: payload.amount as number, // already in integer paise
-            currency: 'INR',
-            name: 'Reserve Pay Guardrail',
-            description: `Purchase from ${payload.merchant}`,
-            order_id: data.razorpayOrderId,
-            modal: {
-              ondismiss: async function () {
-                console.log('Checkout modal closed/dismissed. Releasing 2PC reservation.');
-                try {
-                  await fetch('/api/release', {
-                    method: 'POST',
-                    headers: UI_AUTH_HEADERS,
-                    body: JSON.stringify({ orderId: data.razorpayOrderId, reason: 'Checkout modal cancelled by user' }),
-                  });
-                  fetchInitialData();
-                } catch (releaseErr) {
-                  console.error('Failed to release reservation:', releaseErr);
-                }
-              },
-            },
-            handler: async function (response: Record<string, unknown>) {
-              console.log('Razorpay payment authorized successfully:', response);
-              // Send payment signature for verification and 2PC settlement
-              try {
-                const verifyRes = await fetch('/api/verify-payment', {
-                  method: 'POST',
-                  headers: UI_AUTH_HEADERS,
-                  body: JSON.stringify(response),
-                });
-                const verifyData = await verifyRes.json();
-                if (verifyData.updatedReserveState) {
-                  setReserveState(verifyData.updatedReserveState);
-                } else {
-                  fetchInitialData();
-                }
-              } catch (verifyErr) {
-                console.error('Failed to verify Razorpay payment:', verifyErr);
-              }
-            },
-            prefill: {
-              name: 'Reserve Pay User',
-              email: 'user@example.com',
-              contact: '9999999999',
-            },
-            theme: {
-              color: '#FF571A',
-            },
-          };
-          const rzp = new RazorpayClass(options);
-          rzp.open();
-        } catch (checkoutErr) {
-          console.warn('Razorpay Checkout UI initialization error:', checkoutErr);
-        }
+        triggerRazorpayCheckout(data.razorpayOrderId, payload.amount as number, payload.merchant as string);
       }
 
       return data;
@@ -250,6 +280,10 @@ export default function Home() {
       const data = await res.json();
       if (data.updatedReserveState) {
         setReserveState(data.updatedReserveState);
+      }
+      
+      if (data.decision === 'approve' && data.razorpayOrderId && typeof window !== 'undefined') {
+        triggerRazorpayCheckout(data.razorpayOrderId, tx.amount, tx.merchant || 'Unknown Merchant');
       }
     } catch (err) {
       console.error('Failed to force-approve transaction:', err);
@@ -336,6 +370,13 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-3 text-xs">
+          <input
+            type="password"
+            value={adminApiKey}
+            onChange={(e) => setAdminApiKey(e.target.value)}
+            placeholder="Admin API Key"
+            className="px-2 py-1 bg-[#070809] border border-[#2f3131] rounded-[2px] text-xs font-mono text-[#8e9296] focus:outline-none focus:border-[#ff571a] w-32 md:w-48 transition-colors"
+          />
           <TelemetryBadge
             status="active"
             label="4.2ms SYNC"
@@ -343,12 +384,6 @@ export default function Home() {
           />
           <a
             href="http://localhost:3000"
-            onClick={(e) => {
-              if (window.opener) {
-                e.preventDefault();
-                window.close();
-              }
-            }}
             className="text-[#8e9296] hover:text-white font-mono flex items-center gap-1 transition px-2 py-1 rounded border border-transparent hover:border-[#2f3131]"
           >
             <span>Landing Page</span>
