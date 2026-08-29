@@ -343,6 +343,22 @@ export class SqliteReserveStore implements IReserveStore {
         db.prepare(`
           INSERT INTO transactions (id, merchant, amount, category, quantity, status, reason, timestamp, mccCode, hash, prevHash, razorpayOrderId, agentId, policyId, sessionId, expiresAt)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            merchant = excluded.merchant,
+            amount = excluded.amount,
+            category = excluded.category,
+            quantity = excluded.quantity,
+            status = excluded.status,
+            reason = excluded.reason,
+            timestamp = excluded.timestamp,
+            mccCode = excluded.mccCode,
+            hash = excluded.hash,
+            prevHash = excluded.prevHash,
+            razorpayOrderId = excluded.razorpayOrderId,
+            agentId = excluded.agentId,
+            policyId = excluded.policyId,
+            sessionId = excluded.sessionId,
+            expiresAt = excluded.expiresAt
         `).run(
           approvedTx.id, approvedTx.merchant, approvedTx.amount, approvedTx.category, approvedTx.quantity ?? null,
           approvedTx.status, approvedTx.reason ?? null, approvedTx.timestamp, approvedTx.mccCode ?? null,
@@ -539,6 +555,11 @@ export class SqliteReserveStore implements IReserveStore {
     db.prepare(`
       INSERT INTO transactions (id, agentId, merchant, amount, category, status, reason, timestamp, hash, prevHash, razorpayOrderId, razorpayPaymentId)
       VALUES (?, ?, ?, ?, ?, 'refunded', ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        status = 'refunded',
+        reason = excluded.reason,
+        hash = excluded.hash,
+        razorpayPaymentId = excluded.razorpayPaymentId
     `).run(refundTxId, agentId, tx.merchant, refundAmountPaise, tx.category, reason || 'Refund processed', timestamp, hash, prevHash, tx.razorpayOrderId, razorpayPaymentId);
 
     return { success: true, refundId: refundTxId, refundedAmountPaise: refundAmountPaise };

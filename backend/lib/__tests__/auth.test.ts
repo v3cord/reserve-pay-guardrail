@@ -137,7 +137,7 @@ describe('Application Security & Authentication Module (lib/auth.ts)', () => {
     it('throws fatal security error in production if required keys are missing or dummy', async () => {
       const oldEnv = { ...process.env };
       try {
-        process.env.NODE_ENV = 'production';
+        (process.env as Record<string, string | undefined>).NODE_ENV = 'production';
         process.env.RAZORPAY_KEY_ID = 'rzp_test_dummy_key'; // Dummy value!
         process.env.RAZORPAY_KEY_SECRET = 'dummy_secret';
 
@@ -150,7 +150,7 @@ describe('Application Security & Authentication Module (lib/auth.ts)', () => {
     it('passes validation when all required production keys are securely defined', async () => {
       const oldEnv = { ...process.env };
       try {
-        process.env.NODE_ENV = 'production';
+        (process.env as Record<string, string | undefined>).NODE_ENV = 'production';
         process.env.RAZORPAY_KEY_ID = 'rzp_live_real_prod_key_9988';
         process.env.RAZORPAY_KEY_SECRET = 'live_secret_prod_88997766';
         process.env.RAZORPAY_WEBHOOK_SECRET = 'whsec_live_prod_55443322';

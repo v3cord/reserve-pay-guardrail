@@ -82,7 +82,7 @@ describe('Model Context Protocol (MCP) Server & Agent SDK', () => {
 
       expect(result.status).toBe('FROZEN');
       expect(result.decision).toBe('freeze');
-      expect(result.reason.toLowerCase()).toContain('merchant mismatch');
+      expect(result.reason?.toLowerCase()).toContain('merchant mismatch');
       expect(result.razorpayOrderId).toBeUndefined();
     });
 

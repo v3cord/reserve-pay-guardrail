@@ -26,9 +26,20 @@ export async function POST(request: Request) {
 
     const purchase: PurchaseRequestBody = JSON.parse(rawBody);
 
-    if (!purchase || !purchase.merchant || purchase.amount === undefined || !purchase.category) {
+    if (
+      !purchase ||
+      !purchase.merchant ||
+      typeof purchase.merchant !== 'string' ||
+      purchase.amount === undefined ||
+      purchase.amount === null ||
+      typeof purchase.amount !== 'number' ||
+      isNaN(purchase.amount) ||
+      purchase.amount <= 0 ||
+      !purchase.category ||
+      typeof purchase.category !== 'string'
+    ) {
       return NextResponse.json(
-        { error: 'Invalid payload: merchant, amount, and category are required.' },
+        { error: 'Invalid payload: merchant (string), positive amount (integer paise), and category (string) are required.' },
         { status: 400 }
       );
     }
@@ -152,6 +163,7 @@ export async function POST(request: Request) {
     });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
+    console.error('[API /api/purchase Error]:', err);
     return NextResponse.json(
       { error: 'Failed to process purchase', details: errorMsg },
       { status: 400 }

@@ -336,12 +336,12 @@ describe('Razorpay Webhook Handler (/api/webhook) & Gateway Reconciliation', () 
       const originalEnv = process.env.NODE_ENV;
       const origKeyId = process.env.RAZORPAY_KEY_ID;
       try {
-        process.env.NODE_ENV = 'production';
+        (process.env as Record<string, string | undefined>).NODE_ENV = 'production';
         process.env.RAZORPAY_KEY_ID = 'rzp_test_dummy_key';
 
         expect(() => validateRazorpayConfig()).toThrow(/Fatal Security Error/);
       } finally {
-        process.env.NODE_ENV = originalEnv;
+        (process.env as Record<string, string | undefined>).NODE_ENV = originalEnv;
         process.env.RAZORPAY_KEY_ID = origKeyId;
       }
     });
