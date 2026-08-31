@@ -1,0 +1,2 @@
+import{t as e}from"./rolldown-runtime.Dh6celcD.mjs";function t(e,t){return{description:`The Layer Between Agent Decides and Money Moves`,favicon:`https://framerusercontent.com/assets/OgsUEuFRkZSTBJlB7D7f76yV6Y.png`,robots:`max-image-preview:large`,socialImage:`https://framerusercontent.com/assets/st0MFUa4Aodx2rf680fiU7LdtE8.png`,title:`Reserve Pay Guardrail`}}var n=e((()=>{}));export{t as n,n as t};
+//# sourceMappingURL=shared-lib.BYd7DAOh.mjs.map
