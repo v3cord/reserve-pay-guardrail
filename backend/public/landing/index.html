@@ -847,6 +847,34 @@
 })();
 </script>
 
+<script id="clean-announcement-bar-engine">
+(function() {
+  function cleanAnnouncementText() {
+    document.querySelectorAll('.framer-1yt9wjj, .framer-vm8o11, .framer-1cahdjl').forEach(el => {
+      if (el) el.style.display = 'none';
+    });
+    document.querySelectorAll('p').forEach(p => {
+      if (p.textContent && p.textContent.includes('Reserve Pay Guardrail 2PC Console is live')) {
+        p.textContent = '';
+        if (p.parentElement) p.parentElement.style.display = 'none';
+      }
+    });
+  }
+
+  const observer = new MutationObserver(cleanAnnouncementText);
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  setInterval(cleanAnnouncementText, 150);
+  cleanAnnouncementText();
+})();
+</script>
+
 <style id="smooth-scroll-reveal-styles">
   /* Smooth container & row reveal without DOM text node mutation */
   .smooth-card-reveal,
