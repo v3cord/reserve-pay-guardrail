@@ -823,6 +823,30 @@
 })();
 </script>
 
+<script id="github-link-label-engine">
+(function() {
+  function updateGithubLinkLabels() {
+    document.querySelectorAll('a[href*="github.com/v3cord/reserve-pay-guardrail"]').forEach(link => {
+      if (link.textContent && link.textContent.includes('Open Live Console')) {
+        link.textContent = 'Open GitHub →';
+      }
+    });
+  }
+
+  const observer = new MutationObserver(updateGithubLinkLabels);
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  setInterval(updateGithubLinkLabels, 150);
+  updateGithubLinkLabels();
+})();
+</script>
+
 <style id="smooth-scroll-reveal-styles">
   /* Smooth container & row reveal without DOM text node mutation */
   .smooth-card-reveal,
