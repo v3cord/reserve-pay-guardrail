@@ -1,4 +1,5 @@
 <!DOCTYPE html><!-- Made in Framer · framer.com ✨ --><!-- Published Aug 23, 2026, 1:03 AM UTC --><html dir="ltr"><head>
+	<base href="/landing/">
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width">
 	<meta name="generator" content="Framer 27c13c3">
@@ -666,7 +667,7 @@
 
 <script id="app-launch-button-engine">
 (function() {
-  const TARGET_URL = 'http://localhost:3001';
+  const TARGET_URL = '/dashboard';
 
   function launchApp(e) {
     if (e) e.preventDefault();
@@ -758,6 +759,128 @@
   }, 300);
 
   injectLaunchButton();
+})();
+</script>
+
+<style id="tech-stack-ticker-styles">
+  @keyframes customTechTickerScroll {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+  }
+
+  .tech-ticker-container {
+    width: 100% !important;
+    background: #000000 !important;
+    border-top: 1px solid rgba(255, 87, 26, 0.25) !important;
+    border-bottom: 1px solid rgba(255, 87, 26, 0.25) !important;
+    padding: 16px 0 !important;
+    overflow: hidden !important;
+    position: relative !important;
+    z-index: 15 !important;
+  }
+
+  .tech-ticker-track {
+    display: flex !important;
+    gap: 24px !important;
+    align-items: center !important;
+    width: max-content !important;
+    animation: customTechTickerScroll 28s linear infinite !important;
+  }
+
+  .tech-ticker-item {
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    padding: 8px 16px !important;
+    background: rgba(255, 255, 255, 0.025) !important;
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    border-radius: 4px !important;
+    white-space: nowrap !important;
+  }
+
+  .tech-ticker-name {
+    color: #ff571a !important;
+    font-family: "Geist Pixel Square", monospace !important;
+    font-weight: 700 !important;
+    font-size: 13px !important;
+    letter-spacing: 0.05em !important;
+  }
+
+  .tech-ticker-tag {
+    color: #8e9296 !important;
+    font-family: "Aeonik TRIAL Regular", sans-serif !important;
+    font-size: 12px !important;
+  }
+</style>
+
+<script id="tech-stack-ticker-engine">
+(function() {
+  const TECH_ITEMS = [
+    { name: 'RAZORPAY', tag: '2PC Payment Gateway Engine' },
+    { name: 'GOOGLE GEMINI', tag: '3.6 Flash Intent Parser' },
+    { name: 'MCP PROTOCOL', tag: 'Native AI Agent Tooling' },
+    { name: 'SUPABASE', tag: 'PostgreSQL State Store & Locks' },
+    { name: 'REDIS', tag: 'Distributed Lua Token Buckets' },
+    { name: 'NEXT.JS 14', tag: 'Serverless API & Controller UI' },
+    { name: 'TYPESCRIPT', tag: 'Universal Agent SDK' },
+    { name: 'VITEST', tag: '115+ Concurrency Tests & 2PC Benchmarks' }
+  ];
+
+  function buildTickerTrack() {
+    const track = document.createElement('div');
+    track.className = 'tech-ticker-track';
+
+    const appendItems = () => {
+      TECH_ITEMS.forEach(tech => {
+        const item = document.createElement('div');
+        item.className = 'tech-ticker-item';
+
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'tech-ticker-name';
+        nameSpan.textContent = tech.name;
+
+        const tagSpan = document.createElement('span');
+        tagSpan.className = 'tech-ticker-tag';
+        tagSpan.textContent = tech.tag;
+
+        item.appendChild(nameSpan);
+        item.appendChild(tagSpan);
+        track.appendChild(item);
+      });
+    };
+
+    appendItems();
+    appendItems();
+    return track;
+  }
+
+  function injectTechTicker() {
+    const targets = document.querySelectorAll('[data-framer-name="Logos"], .framer-1a41k10, .framer-1o2csl, [data-framer-name="Ticker"]');
+    
+    targets.forEach(target => {
+      if (target.dataset.techTickerInjected) return;
+      target.dataset.techTickerInjected = 'true';
+      target.innerHTML = '';
+
+      const container = document.createElement('div');
+      container.className = 'tech-ticker-container';
+      container.appendChild(buildTickerTrack());
+
+      target.appendChild(container);
+    });
+  }
+
+  const observer = new MutationObserver(injectTechTicker);
+  if (document.body) {
+    observer.observe(document.body, { childList: true, subtree: true });
+  } else {
+    document.addEventListener('DOMContentLoaded', () => {
+      observer.observe(document.body, { childList: true, subtree: true });
+    });
+  }
+
+  setInterval(injectTechTicker, 300);
+  injectTechTicker();
 })();
 </script>
 

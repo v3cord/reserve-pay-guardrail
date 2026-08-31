@@ -383,7 +383,7 @@ export default function Home() {
             sublabel="SSE STREAMING"
           />
           <a
-            href="http://localhost:3000"
+            href="/"
             className="text-[#8e9296] hover:text-white font-mono flex items-center gap-1 transition px-2 py-1 rounded border border-transparent hover:border-[#2f3131]"
           >
             <span>Landing Page</span>
