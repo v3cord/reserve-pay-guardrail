@@ -420,7 +420,7 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser to access the Controller UI.
+Open [http://localhost:3000](http://localhost:3000) in your browser to view the Product Landing Page, or visit [http://localhost:3000/dashboard](http://localhost:3000/dashboard) to access the Interactive Controller UI.
 
 ### Running the Test Suite
 The project includes a comprehensive Vitest suite covering all API endpoints, concurrency locks, token bucket rate-limiting, and MCP tools:

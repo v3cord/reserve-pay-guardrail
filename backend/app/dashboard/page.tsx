@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect } from 'react';
 import { Policy, ReserveState, Transaction } from '@/lib/types';
-import CornerBrackets from './components/CornerBrackets';
-import TelemetryBadge from './components/TelemetryBadge';
+import CornerBrackets from '../components/CornerBrackets';
+import TelemetryBadge from '../components/TelemetryBadge';
 import {
   Terminal,
   Activity,
