@@ -17,6 +17,7 @@ let activeStoreInstance: IReserveStore | null = null;
 export function getStore(): IReserveStore {
   if (!activeStoreInstance) {
     if (process.env.DATABASE_URL && process.env.NODE_ENV !== 'test') {
+      console.log('UPDATED TO SUPABASE');
       activeStoreInstance = new PostgresReserveStore();
     } else {
       activeStoreInstance = new SqliteReserveStore();

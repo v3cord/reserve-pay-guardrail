@@ -18,6 +18,7 @@ export class PostgresReserveStore implements IReserveStore {
   constructor(pool?: Pool, tokenBucket?: IRedisTokenBucket) {
     this.pool = pool || getPgPool();
     this.tokenBucket = tokenBucket || getTokenBucket();
+    console.log('UPDATED TO SUPABASE');
   }
 
   async getLastTransactionHash(agentId = 'default_agent'): Promise<string> {

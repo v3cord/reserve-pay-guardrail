@@ -6,11 +6,13 @@ let pgPool: Pool | null = null;
 
 export function getPgPoolConfig(): PoolConfig {
   const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/reserve_db';
+  const isRemote = connectionString.includes('supabase.com') || connectionString.includes('neon.tech') || connectionString.includes('sslmode=require');
   return {
     connectionString,
     max: parseInt(process.env.PG_POOL_MAX || '20', 10),
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 5000,
+    ssl: isRemote ? { rejectUnauthorized: false } : undefined,
   };
 }
 

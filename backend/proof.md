@@ -60,9 +60,9 @@ async function runBenchmark() {
     console.log(`Rejected Transactions: ${rejectedTransactions} (Expected: ${CONCURRENT_REQUESTS - 1})`);
     
     if (successfulTransactions === 1 && accountBalance === 0) {
-        console.log("✅ RESULT: 100% Double-Spending Prevented.");
+        console.log("RESULT: 100% Double-Spending Prevented.");
     } else {
-        console.log("❌ RESULT: Guardrail Failed.");
+        console.log("RESULT: Guardrail Failed.");
     }
 }
 

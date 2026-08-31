@@ -1,4 +1,4 @@
-# 🛡️ Reserve Pay Guardrail
+# Reserve Pay Guardrail
 
 > **The layer that sits between 'agent decides' and 'money moves.'**
 
@@ -13,30 +13,30 @@
 
 ---
 
-## 📖 Table of Contents
+## Table of Contents
 
-- [Overview](#-overview)
-- [System Architecture](#-system-architecture)
-- [Key Features](#-key-features)
-- [Repository Structure](#-repository-structure)
-- [Model Context Protocol (MCP) Integration](#-model-context-protocol-mcp-integration)
-- [TypeScript Agent SDK (`@razorpay/reserve-guard`)](#-typescript-agent-sdk-razorpayreserve-guard)
-- [API Reference](#-api-reference)
-- [Concurrency & Two-Phase Commit (2PC)](#-concurrency--two-phase-commit-2pc)
-- [Tamper-Evident Cryptographic Ledger](#-tamper-evident-cryptographic-ledger)
-- [Security, Authentication & RBAC](#-security-authentication--rbac)
-- [Interactive Controller UI](#-interactive-controller-ui)
-- [Getting Started](#-getting-started)
+- [Overview](#overview)
+- [System Architecture](#system-architecture)
+- [Key Features](#key-features)
+- [Repository Structure](#repository-structure)
+- [Model Context Protocol (MCP) Integration](#model-context-protocol-mcp-integration)
+- [TypeScript Agent SDK (`@razorpay/reserve-guard`)](#typescript-agent-sdk-razorpayreserve-guard)
+- [API Reference](#api-reference)
+- [Concurrency & Two-Phase Commit (2PC)](#concurrency--two-phase-commit-2pc)
+- [Tamper-Evident Cryptographic Ledger](#tamper-evident-cryptographic-ledger)
+- [Security, Authentication & RBAC](#security-authentication--rbac)
+- [Interactive Controller UI](#interactive-controller-ui)
+- [Getting Started](#getting-started)
   - [Prerequisites](#prerequisites)
   - [Environment Configuration](#environment-configuration)
   - [Installation & Running](#installation--running)
   - [Running the Test Suite](#running-the-test-suite)
-- [Benchmarks & Deterministic Proof](#-benchmarks--deterministic-proof)
-- [Contributing & License](#-contributing--license)
+- [Benchmarks & Deterministic Proof](#benchmarks--deterministic-proof)
+- [Contributing & License](#contributing--license)
 
 ---
 
-## 🌟 Overview
+## Overview
 
 Autonomous AI agents are increasingly tasked with procurement, booking, dining, and resource provisioning. However, giving agents unchecked financial authority introduces catastrophic risks: runaway loops, hallucinated orders, double-spending under concurrent execution, and merchant policy violations.
 
@@ -49,23 +49,23 @@ Autonomous AI agents are increasingly tasked with procurement, booking, dining, 
 
 ---
 
-## 🏗️ System Architecture
+## System Architecture
 
 ```mermaid
 flowchart TB
-    subgraph AgentLayer["🤖 Autonomous AI Agents"]
+    subgraph AgentLayer["Autonomous AI Agents"]
         Claude["Claude Desktop / Cursor (MCP)"]
         LangChainAgent["LangChain / CrewAI / AutoGen"]
         DirectAgent["OpenAI / Custom Agent SDK"]
     end
 
-    subgraph InterfaceLayer["🔌 Integration Layer"]
+    subgraph InterfaceLayer["Integration Layer"]
         MCP["MCP Server (STDIO / SSE)\nreserve_check_budget\nreserve_request_purchase\nreserve_explain_policy"]
         SDK["@razorpay/reserve-guard SDK\nReserveGuardClient\ncreateReserveGuardrailTool"]
         REST["Next.js REST API\n/api/purchase • /api/policy\n/api/reserve • /api/verify-payment"]
     end
 
-    subgraph GuardrailCore["🛡️ Reserve Pay Guardrail Engine"]
+    subgraph GuardrailCore["Reserve Pay Guardrail Engine"]
         Auth["RBAC & Security Filter\nADMIN_ROLE | AGENT_ROLE | WEBHOOK_ROLE"]
         NLParser["Gemini 3.6 Flash Intent Parser\nNatural Language -> Structured Policy"]
         GuardEngine["Deterministic Policy Engine\n• Merchant Least Privilege\n• Ceiling & Session Caps\n• Micro-Purchase Sanity Check\n• MCC Code Validation"]
@@ -73,13 +73,13 @@ flowchart TB
         HashChain["SHA-256 Tamper-Evident Hash Chain\nSequence-Locked Ledger"]
     end
 
-    subgraph StorageLayer["💾 Storage & Concurrency Engine"]
+    subgraph StorageLayer["Storage & Concurrency Engine"]
         PG[("PostgreSQL\nSELECT ... FOR UPDATE\nRow-Level Locks")]
         SQLite[("SQLite (better-sqlite3)\nWAL Mode + Immediate Locks")]
         Redis[("Redis Token Bucket\nAtomic Lua Scripts")]
     end
 
-    subgraph PaymentLayer["💳 Razorpay Payment Gateway"]
+    subgraph PaymentLayer["Razorpay Payment Gateway"]
         OrdersAPI["Razorpay Orders API\nOrder Creation (2PC Hold)"]
         Checkout["Razorpay Checkout Modal\nCustomer Payment"]
         Webhooks["Webhook Ingestion\nHMAC-SHA256 Reconciliation"]
@@ -109,7 +109,7 @@ flowchart TB
 
 ---
 
-## ⚡ Key Features
+## Key Features
 
 | Feature | Description |
 |---|---|
@@ -125,7 +125,7 @@ flowchart TB
 
 ---
 
-## 📁 Repository Structure
+## Repository Structure
 
 ```
 .
@@ -182,7 +182,7 @@ flowchart TB
 
 ---
 
-## 🤖 Model Context Protocol (MCP) Integration
+## Model Context Protocol (MCP) Integration
 
 Autonomous agents running in **Claude Desktop**, **Cursor**, **LangGraph**, or any MCP-compliant client can directly interact with Reserve Pay Guardrail.
 
@@ -217,7 +217,7 @@ Add the server entry to your `claude_desktop_config.json` (Windows: `%APPDATA%\C
 
 ---
 
-## 📦 TypeScript Agent SDK (`@razorpay/reserve-guard`)
+## TypeScript Agent SDK (`@razorpay/reserve-guard`)
 
 The SDK provides a lightweight client and zero-config tool definitions for major agent frameworks.
 
@@ -250,10 +250,10 @@ async function main() {
   });
 
   if (purchase.status === 'APPROVED') {
-    console.log(`✅ Approved! Razorpay Order ID: ${purchase.razorpayOrderId}`);
+    console.log(`Approved! Razorpay Order ID: ${purchase.razorpayOrderId}`);
     // Agent proceeds to trigger checkout / settlement
   } else {
-    console.warn(`⛔ Frozen by Guardrail: ${purchase.reason}`);
+    console.warn(`Frozen by Guardrail: ${purchase.reason}`);
   }
 }
 
@@ -281,7 +281,7 @@ const langchainTools = [paymentTool.langchain];
 
 ---
 
-## 📡 API Reference
+## API Reference
 
 All requests require authentication headers (`X-API-Key` or `Authorization: Bearer <jwt>`).
 
@@ -298,7 +298,7 @@ All requests require authentication headers (`X-API-Key` or `Authorization: Bear
 
 ---
 
-## 🔒 Concurrency & Two-Phase Commit (2PC)
+## Concurrency & Two-Phase Commit (2PC)
 
 Reserve Pay Guardrail solves the double-spending race condition inherent to distributed agent systems via a strict Two-Phase Commit (2PC) protocol:
 
@@ -334,7 +334,7 @@ sequenceDiagram
 
 ---
 
-## 🔗 Tamper-Evident Cryptographic Ledger
+## Tamper-Evident Cryptographic Ledger
 
 Every transaction is sequence-locked in an immutable SHA-256 hash chain:
 
@@ -345,7 +345,7 @@ $$\text{Hash}_n = \text{SHA256}(\text{id} + \text{amount} + \text{merchant} + \t
 
 ---
 
-## 🛡️ Security, Authentication & RBAC
+## Security, Authentication & RBAC
 
 The system enforces fail-closed Role-Based Access Control:
 
@@ -362,7 +362,7 @@ The system enforces fail-closed Role-Based Access Control:
 
 ---
 
-## 🖥️ Interactive Controller UI
+## Interactive Controller UI
 
 The Next.js 14 Controller Dashboard provides a live 3-panel command center tailored for presentations and demonstrations:
 
@@ -378,7 +378,7 @@ The Next.js 14 Controller Dashboard provides a live 3-panel command center tailo
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 - **Node.js**: `v18.0.0` or higher (`v20+` recommended)
@@ -437,7 +437,7 @@ npm test
 
 ---
 
-## 📊 Benchmarks & Deterministic Proof
+## Benchmarks & Deterministic Proof
 
 To validate double-spending prevention under extreme concurrency, the system was subjected to a high-concurrency race condition benchmark (`backend/proof.md`):
 
@@ -447,7 +447,7 @@ To validate double-spending prevention under extreme concurrency, the system was
 
 ---
 
-## 📄 Contributing & License
+## Contributing & License
 
 Contributions are welcome! Please ensure all test suites pass (`npm test`) and code adheres to TypeScript and ESLint standards.
 

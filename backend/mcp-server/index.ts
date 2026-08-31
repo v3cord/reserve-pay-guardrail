@@ -189,7 +189,7 @@ export async function handleRequestPurchase(args: {
       merchant: purchasePayload.merchant,
       category: purchasePayload.category,
       remainingBudgetRupees: (guardResult.updatedReserveState.availablePaise / 100).toFixed(2),
-      message: `✅ Purchase approved! 2PC Reservation created. Order ID: ${razorpayOrderId}`,
+      message: `Purchase approved! 2PC Reservation created. Order ID: ${razorpayOrderId}`,
     };
   } else {
     return {
@@ -202,7 +202,7 @@ export async function handleRequestPurchase(args: {
       merchant: purchasePayload.merchant,
       category: purchasePayload.category,
       remainingBudgetRupees: (guardResult.updatedReserveState.availablePaise / 100).toFixed(2),
-      message: `⚠️ Purchase FROZEN by guardrail policy: ${guardResult.reason}`,
+      message: `Purchase FROZEN by guardrail policy: ${guardResult.reason}`,
     };
   }
 }
@@ -218,7 +218,7 @@ export async function handleExplainPolicy(agentId = 'default_agent', query?: str
   const category = policy.category || 'Any category';
   const maxQty = policy.reasonableQuantity ?? 2;
 
-  let explanation = `🛡️ Active Reserve Pay Guardrail Policy for Agent '${agentId}':\n` +
+  let explanation = `Active Reserve Pay Guardrail Policy for Agent '${agentId}':\n` +
     `• Allowed Merchants: ${merchants}\n` +
     `• Allowed Category: ${category}\n` +
     `• Single Transaction Ceiling: ${ceilingRupees}\n` +

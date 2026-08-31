@@ -829,7 +829,7 @@ export default function Home() {
                               : 'text-[#8e9296] bg-[#070809] border-[#1b1e20]'
                           }`}
                         >
-                          {isFrozen ? `⚠️ ${tx.reason}` : `ℹ️ ${tx.reason}`}
+                          {tx.reason}
                         </div>
                       )}
                     </div>
