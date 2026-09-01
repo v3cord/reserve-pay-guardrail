@@ -25,7 +25,9 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install Dependencies
-        run: npm ci
+        run: |
+          npm ci
+          npm rebuild better-sqlite3
 
       - name: Run Secret Scanning
         run: |
