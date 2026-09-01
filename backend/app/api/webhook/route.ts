@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
+import db from '../../../lib/db';
 import {
-  recordTransaction,
   settleTransaction,
   releaseReservation,
   processRefund,
   disputeTransaction,
   recordSecurityAudit,
-} from '@/lib/store';
-import { validateRazorpayConfig } from '@/lib/razorpayClient';
-import { getClientIp } from '@/lib/auth';
+  appendLedgerEvent,
+  getStore
+} from '../../../lib/store';
+import { validateRazorpayConfig } from '../../../lib/razorpay';
+import { getClientIp } from '../../../lib/auth';
 
 export async function POST(request: Request) {
   try {
@@ -17,13 +19,12 @@ export async function POST(request: Request) {
 
     const rawBody = await request.text();
     const signature = request.headers.get('x-razorpay-signature');
+    const eventIdHeader = request.headers.get('x-razorpay-event-id');
     const secret = process.env.RAZORPAY_WEBHOOK_SECRET || (process.env.NODE_ENV === 'test' ? 'dev_webhook_secret' : null);
 
     if (!secret) {
       throw new Error('Fatal Security Error: RAZORPAY_WEBHOOK_SECRET is missing.');
     }
-
-    const webhookSecret = secret;
 
     if (!signature) {
       recordSecurityAudit({
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
     }
 
     const expectedSignature = crypto
-      .createHmac('sha256', webhookSecret)
+      .createHmac('sha256', secret)
       .update(rawBody)
       .digest('hex');
 
@@ -64,9 +65,23 @@ export async function POST(request: Request) {
       );
     }
 
-
     const payload = JSON.parse(rawBody);
     const event: string = payload.event;
+    const eventId = eventIdHeader || payload.event_id || payload.id || `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+
+    // 1. Webhook Deduplication Check
+    const store = getStore();
+    if (store.storeType === 'sqlite') {
+      const existingEvt = db.prepare('SELECT eventId FROM webhook_events WHERE eventId = ?').get(eventId);
+      if (existingEvt) {
+        return NextResponse.json({ status: 'already_processed', eventId }, { status: 200 });
+      }
+      db.prepare('INSERT INTO webhook_events (eventId, eventType, timestamp) VALUES (?, ?, ?)').run(
+        eventId,
+        event,
+        new Date().toISOString()
+      );
+    }
 
     // Extract entities from payload
     const paymentEntity = payload.payload?.payment?.entity;
@@ -74,19 +89,32 @@ export async function POST(request: Request) {
     const refundEntity = payload.payload?.refund?.entity;
     const disputeEntity = payload.payload?.dispute?.entity;
 
-    const orderId: string | undefined =
-      paymentEntity?.order_id ||
-      orderEntity?.id ||
-      refundEntity?.order_id;
-    const paymentId: string | undefined =
-      paymentEntity?.id ||
-      refundEntity?.payment_id ||
-      disputeEntity?.payment_id;
-
+    const orderId: string | undefined = paymentEntity?.order_id || orderEntity?.id || refundEntity?.order_id;
+    const paymentId: string | undefined = paymentEntity?.id || refundEntity?.payment_id || disputeEntity?.payment_id;
     const identifier = orderId || paymentId;
 
     if (identifier) {
-      if (event === 'payment.failed') {
+      if (event === 'payment.captured' || event === 'order.paid') {
+        const capturedAmount = paymentEntity?.amount || orderEntity?.amount;
+        
+        // 2. Triple-Binding Validation
+        const state = await store.getReserveState();
+        const matchedTx = state.transactions.find(t => t.razorpayOrderId === orderId || t.id === orderId || t.razorpayPaymentId === paymentId);
+        
+        if (matchedTx && capturedAmount && matchedTx.amount !== capturedAmount) {
+          await appendLedgerEvent({
+            transactionId: matchedTx.id,
+            tenantId: 'default_tenant',
+            agentId: matchedTx.agentId || 'default_agent',
+            eventType: 'PAYMENT_AMOUNT_MISMATCH',
+            payload: { reservedPaise: matchedTx.amount, capturedPaise: capturedAmount },
+            timestamp: new Date().toISOString(),
+          });
+          return NextResponse.json({ error: 'Triple-binding mismatch: captured amount does not match reservation' }, { status: 400 });
+        }
+
+        await settleTransaction(identifier, paymentId);
+      } else if (event === 'payment.failed') {
         const failureReason =
           paymentEntity?.error_description ||
           paymentEntity?.error_reason ||
@@ -99,24 +127,19 @@ export async function POST(request: Request) {
         if (refundAmountPaise > 0) {
           await processRefund(identifier, refundAmountPaise, refundId, refundReason);
         }
-      } else if (event === 'payment.dispute.created' || event === 'dispute.created') {
-        const disputeReason = disputeEntity?.reason_code
-          ? `Dispute created (${disputeEntity.reason_code}): ${disputeEntity.description || 'Manual review required'}`
-          : `Dispute created via Razorpay Webhook (${event})`;
+      } else if (event === 'payment.dispute.created' || event === 'payment.dispute.won' || event === 'payment.dispute.lost') {
+        const disputeReason = `Payment dispute event: ${event} (Dispute ID: ${disputeEntity?.id || 'N/A'})`;
         await disputeTransaction(identifier, disputeReason);
-      } else if (event === 'payment.captured' || event === 'order.paid' || event === 'payment.authorized') {
-        const settleResult = await settleTransaction(identifier, paymentId);
-        if (settleResult.transaction) {
-          settleResult.transaction.reason = `Verified via Razorpay Webhook (${event})`;
-          await recordTransaction(settleResult.transaction);
-        }
       }
     }
 
-    return NextResponse.json({ status: 'ok', received: true, event });
+    return NextResponse.json({ status: 'ok', event, eventId }, { status: 200 });
   } catch (err: unknown) {
-    const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    return NextResponse.json({ error: 'Failed to process webhook', details: errorMsg }, { status: 400 });
+    const errorMsg = err instanceof Error ? err.message : 'Unknown webhook processing error';
+    console.error('[API /api/webhook Error]:', err);
+    return NextResponse.json(
+      { error: 'Webhook processing error', details: errorMsg },
+      { status: 500 }
+    );
   }
 }
-

@@ -144,6 +144,57 @@ export async function getSecurityAuditLogs(limit = 50): Promise<SecurityAuditEve
   return await getStore().getSecurityAuditLogs(limit);
 }
 
+export async function getLastLedgerEventHash(agentId = 'default_agent'): Promise<string> {
+  const store = getStore();
+  if (store.getLastLedgerEventHash) {
+    return await store.getLastLedgerEventHash(agentId);
+  }
+  return '0000000000000000000000000000000000000000000000000000000000000000';
+}
+
+export async function appendLedgerEvent(
+  event: Parameters<IReserveStore['appendLedgerEvent']>[0]
+) {
+  const res = await getStore().appendLedgerEvent(event);
+  await publishUpdate();
+  return res;
+}
+
+export async function getLedgerEvents(agentId = 'default_agent', limit = 50) {
+  return await getStore().getLedgerEvents(agentId, limit);
+}
+
+export async function claimIdempotencyKey(
+  tenantId: string,
+  agentId: string,
+  key: string,
+  requestHash: string
+) {
+  return await getStore().claimIdempotencyKey(tenantId, agentId, key, requestHash);
+}
+
+export async function completeIdempotencyKey(
+  tenantId: string,
+  agentId: string,
+  key: string,
+  response: Record<string, unknown>
+) {
+  return await getStore().completeIdempotencyKey(tenantId, agentId, key, response);
+}
+
+export async function failIdempotencyKey(
+  tenantId: string,
+  agentId: string,
+  key: string
+) {
+  return await getStore().failIdempotencyKey(tenantId, agentId, key);
+}
+
+export async function flagOrderCreationUnknown(txId: string, agentId = 'default_agent'): Promise<void> {
+  await getStore().flagOrderCreationUnknown(txId, agentId);
+  await publishUpdate();
+}
+
 export async function rebuildHashChainForAgent(agentId = 'default_agent'): Promise<void> {
   const store = getStore();
   if (store.rebuildHashChainForAgent) {
@@ -160,3 +211,4 @@ export async function expireStaleTransactions(agentId = 'default_agent'): Promis
   }
   return 0;
 }
+

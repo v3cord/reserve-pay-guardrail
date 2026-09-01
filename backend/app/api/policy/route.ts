@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server';
-import { getActivePolicy, setActivePolicy } from '@/lib/store';
-import { authenticateRequest } from '@/lib/auth';
+import { getActivePolicy, setActivePolicy } from '../../../lib/store';
+import { authenticateRequest } from '../../../lib/auth';
 
 export async function GET(request: Request) {
   const auth = await authenticateRequest(request, {
-    allowedRoles: ['ADMIN_ROLE', 'AGENT_ROLE'],
+    allowedRoles: ['admin', 'service', 'agent', 'demo_user'],
   });
 
-  if (!auth.authenticated) {
+  if (!auth.authenticated || !auth.context) {
     return NextResponse.json(
       { error: auth.error || 'Unauthorized' },
       { status: auth.statusCode || 401 }
@@ -24,19 +24,19 @@ export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
     const auth = await authenticateRequest(request, {
-      allowedRoles: ['ADMIN_ROLE'],
+      allowedRoles: ['admin', 'service', 'demo_user'],
       rawBody,
     });
 
-    if (!auth.authenticated) {
+    if (!auth.authenticated || !auth.context) {
       return NextResponse.json(
         { error: auth.error || 'Unauthorized' },
         { status: auth.statusCode || 401 }
       );
     }
 
-    const body = JSON.parse(rawBody);
-    const agentId = body.agentId || 'default_agent';
+    const body = JSON.parse(rawBody || '{}');
+    const agentId = body.agentId || auth.context?.agentId || 'default_agent';
     const policy = await setActivePolicy(body.policy || body, agentId);
     return NextResponse.json({ message: 'Policy updated successfully', policy });
   } catch (err: unknown) {
@@ -44,4 +44,3 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Failed to set policy', details: errorMsg }, { status: 400 });
   }
 }
-

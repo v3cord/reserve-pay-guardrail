@@ -44,6 +44,7 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
         id SERIAL PRIMARY KEY,
         agent_id VARCHAR(255) UNIQUE NOT NULL,
         tenant_id VARCHAR(255) NOT NULL DEFAULT 'default_tenant',
+        version INT NOT NULL DEFAULT 1,
         amount_ceiling BIGINT,
         category VARCHAR(255),
         allowed_merchants JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -81,18 +82,68 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
         category VARCHAR(255) NOT NULL,
         quantity NUMERIC,
         status VARCHAR(64) NOT NULL,
+        decision_status VARCHAR(64) NOT NULL DEFAULT 'allowed',
+        payment_status VARCHAR(64) NOT NULL DEFAULT 'requested',
         reason TEXT,
         timestamp TIMESTAMPTZ NOT NULL,
         mcc_code VARCHAR(32),
+        product_id VARCHAR(255),
+        catalog_version VARCHAR(64),
         hash VARCHAR(64) NOT NULL,
         prev_hash VARCHAR(64) NOT NULL,
         sequence_num BIGSERIAL,
         razorpay_order_id VARCHAR(255),
         razorpay_payment_id VARCHAR(255),
         policy_id VARCHAR(255),
+        policy_version INT DEFAULT 1,
         session_id VARCHAR(255),
+        captured_paise BIGINT DEFAULT 0,
+        refunded_paise BIGINT DEFAULT 0,
         expires_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ledger_events (
+        id VARCHAR(255) PRIMARY KEY,
+        transaction_id VARCHAR(255) NOT NULL,
+        tenant_id VARCHAR(255) NOT NULL DEFAULT 'default_tenant',
+        agent_id VARCHAR(255) NOT NULL,
+        event_type VARCHAR(64) NOT NULL,
+        payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+        sequence_num BIGSERIAL,
+        prev_hash VARCHAR(64) NOT NULL,
+        hash VARCHAR(64) NOT NULL,
+        policy_id VARCHAR(255),
+        policy_version INT DEFAULT 1,
+        timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        CONSTRAINT uq_ledger_tx_seq UNIQUE (transaction_id, sequence_num)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS idempotency_keys (
+        tenant_id VARCHAR(255) NOT NULL,
+        agent_id VARCHAR(255) NOT NULL,
+        key VARCHAR(255) NOT NULL,
+        request_hash VARCHAR(64) NOT NULL,
+        status VARCHAR(64) NOT NULL,
+        response JSONB,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        PRIMARY KEY (tenant_id, agent_id, key)
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS webhook_events (
+        event_id VARCHAR(255) PRIMARY KEY,
+        event_type VARCHAR(128) NOT NULL,
+        payload_hash VARCHAR(64) NOT NULL,
+        received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
 
@@ -147,6 +198,7 @@ export function initDatabase() {
     CREATE TABLE IF NOT EXISTS policies (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       agentId TEXT UNIQUE,
+      version INTEGER DEFAULT 1,
       amountCeiling INTEGER,
       category TEXT,
       allowedMerchants TEXT NOT NULL,
@@ -174,18 +226,60 @@ export function initDatabase() {
       category TEXT NOT NULL,
       quantity INTEGER,
       status TEXT NOT NULL,
+      decisionStatus TEXT DEFAULT 'allowed',
+      paymentStatus TEXT DEFAULT 'requested',
       reason TEXT,
       timestamp TEXT NOT NULL,
       mccCode TEXT,
+      productId TEXT,
+      catalogVersion TEXT,
       hash TEXT,
       prevHash TEXT,
       razorpayOrderId TEXT,
       razorpayPaymentId TEXT,
       agentId TEXT,
       policyId TEXT,
+      policyVersion INTEGER DEFAULT 1,
       sessionId TEXT,
       tenantId TEXT,
+      capturedPaise INTEGER DEFAULT 0,
+      refundedPaise INTEGER DEFAULT 0,
       expiresAt TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS ledger_events (
+      id TEXT PRIMARY KEY,
+      transactionId TEXT NOT NULL,
+      tenantId TEXT NOT NULL DEFAULT 'default_tenant',
+      agentId TEXT NOT NULL,
+      eventType TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      sequenceNum INTEGER NOT NULL,
+      prevHash TEXT NOT NULL,
+      hash TEXT NOT NULL,
+      policyId TEXT,
+      policyVersion INTEGER DEFAULT 1,
+      timestamp TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS idempotency_keys (
+      tenantId TEXT NOT NULL,
+      agentId TEXT NOT NULL,
+      key TEXT NOT NULL,
+      requestHash TEXT NOT NULL,
+      status TEXT NOT NULL,
+      response TEXT,
+      createdAt TEXT NOT NULL,
+      updatedAt TEXT NOT NULL,
+      PRIMARY KEY (tenantId, agentId, key)
+    );
+
+    CREATE TABLE IF NOT EXISTS webhook_events (
+      eventId TEXT PRIMARY KEY,
+      eventType TEXT NOT NULL,
+      payloadHash TEXT NOT NULL,
+      receivedAt TEXT NOT NULL,
+      processedAt TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS security_audit_logs (
@@ -202,6 +296,7 @@ export function initDatabase() {
   `);
 
   try { db.exec('ALTER TABLE policies ADD COLUMN agentId TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE policies ADD COLUMN version INTEGER DEFAULT 1;'); } catch {}
   try { db.exec('ALTER TABLE policies ADD COLUMN allowedMccCodes TEXT;'); } catch {}
   try { db.exec('ALTER TABLE policies ADD COLUMN sessionId TEXT;'); } catch {}
   try { db.exec('ALTER TABLE policies ADD COLUMN tenantId TEXT;'); } catch {}
@@ -211,15 +306,22 @@ export function initDatabase() {
   try { db.exec('ALTER TABLE reserve_state ADD COLUMN heldPaise INTEGER DEFAULT 0;'); } catch {}
   try { db.exec('ALTER TABLE reserve_state ADD COLUMN settledPaise INTEGER DEFAULT 0;'); } catch {}
 
+  try { db.exec('ALTER TABLE transactions ADD COLUMN decisionStatus TEXT DEFAULT "allowed";'); } catch {}
+  try { db.exec('ALTER TABLE transactions ADD COLUMN paymentStatus TEXT DEFAULT "requested";'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN mccCode TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE transactions ADD COLUMN productId TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE transactions ADD COLUMN catalogVersion TEXT;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN hash TEXT;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN prevHash TEXT;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN razorpayOrderId TEXT;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN razorpayPaymentId TEXT;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN agentId TEXT;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN policyId TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE transactions ADD COLUMN policyVersion INTEGER DEFAULT 1;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN sessionId TEXT;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN tenantId TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE transactions ADD COLUMN capturedPaise INTEGER DEFAULT 0;'); } catch {}
+  try { db.exec('ALTER TABLE transactions ADD COLUMN refundedPaise INTEGER DEFAULT 0;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN expiresAt TEXT;'); } catch {}
 
   try { db.exec("UPDATE policies SET agentId = 'default_agent' WHERE agentId IS NULL;"); } catch {}
@@ -237,12 +339,13 @@ export function initDatabase() {
 
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_policies_agentId ON policies(agentId);'); } catch {}
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_reserve_state_agentId ON reserve_state(agentId);'); } catch {}
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_tx_seq ON ledger_events(transactionId, sequenceNum);'); } catch {}
 
   const policyCount = db.prepare("SELECT COUNT(*) as count FROM policies WHERE agentId = 'default_agent' OR id = 1").get() as { count: number };
   if (policyCount.count === 0) {
     db.prepare(`
-      INSERT INTO policies (agentId, amountCeiling, category, allowedMerchants, sessionCap, reasonableQuantity, allowedMccCodes, sessionId, tenantId)
-      VALUES ('default_agent', 50000, 'Electronics', ?, 100000, NULL, NULL, NULL, NULL)
+      INSERT INTO policies (agentId, amountCeiling, category, allowedMerchants, sessionCap, reasonableQuantity, allowedMccCodes, sessionId, tenantId, version)
+      VALUES ('default_agent', 50000, 'Electronics', ?, 100000, NULL, NULL, NULL, NULL, 1)
     `).run(JSON.stringify(['Amazon', 'BestBuy']));
   }
 
@@ -258,3 +361,4 @@ export function initDatabase() {
 initDatabase();
 
 export default db;
+

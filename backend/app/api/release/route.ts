@@ -1,23 +1,23 @@
 import { NextResponse } from 'next/server';
-import { releaseReservation } from '@/lib/store';
-import { authenticateRequest } from '@/lib/auth';
+import { releaseReservation } from '../../../lib/store';
+import { authenticateRequest } from '../../../lib/auth';
 
 export async function POST(request: Request) {
   try {
     const rawBody = await request.text();
     const auth = await authenticateRequest(request, {
-      allowedRoles: ['ADMIN_ROLE', 'AGENT_ROLE'],
+      allowedRoles: ['admin', 'service', 'agent', 'demo_user'],
       rawBody,
     });
 
-    if (!auth.authenticated) {
+    if (!auth.authenticated || !auth.context) {
       return NextResponse.json(
         { error: auth.error || 'Unauthorized' },
         { status: auth.statusCode || 401 }
       );
     }
 
-    const body = JSON.parse(rawBody);
+    const body = JSON.parse(rawBody || '{}');
     const { txId, orderId, reason, agentId } = body;
     const identifier = txId || orderId;
 
@@ -43,4 +43,3 @@ export async function POST(request: Request) {
     );
   }
 }
-

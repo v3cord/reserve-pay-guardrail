@@ -1,4 +1,5 @@
-import { Policy, ReserveState, AttemptedPurchase, GuardCheckResult, Transaction } from './types';
+import { Policy, ReserveState, AttemptedPurchase, GuardCheckResult, Transaction, DecisionStatus, PaymentStatus } from './types';
+import { resolveCatalogProduct } from './merchantCatalog';
 
 // Legal corporate suffixes and entity qualifiers to strip for merchant normalization
 const CORPORATE_SUFFIX_REGEX = /\b(india\s+private\s+limited|private\s+limited|pvt\.?\s+ltd\.?|pvt|ltd|inc|corp|llc|co)\b/gi;
@@ -37,8 +38,6 @@ export function isMerchantAllowed(attemptedMerchant: string, allowedMerchants: s
     }
 
     // 2. Asymmetric Sub-Brand Matching (Least Privilege)
-    // Allowed general brand (e.g. "Swiggy") allows attempted sub-brand (e.g. "Swiggy Instamart").
-    // Must match on word-boundary (e.g. "swiggy " prefix) so "Pay" does not match "PayPal".
     if (allowedNorm && attemptedNorm) {
       if (attemptedNorm.startsWith(`${allowedNorm} `)) {
         return true;
@@ -126,7 +125,7 @@ export function isCategoryAllowed(
   }
 
   if (policy.category) {
-    const attemptedCatLower = attempted.category.trim().toLowerCase();
+    const attemptedCatLower = (attempted.category || '').trim().toLowerCase();
     const policyCatLower = policy.category.trim().toLowerCase();
 
     if (attemptedCatLower === policyCatLower) return true;
@@ -151,8 +150,34 @@ export function guardCheck(
   policy: Policy,
   reserveState: ReserveState
 ): GuardCheckResult {
-  const txId = attemptedPurchase.id || `tx_${Date.now()}`;
+  const txId = attemptedPurchase.id || `tx_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   const timestamp = attemptedPurchase.timestamp || new Date().toISOString();
+
+  // Authoritative catalog resolution if productId provided
+  let merchant = attemptedPurchase.merchant || '';
+  let category = attemptedPurchase.category || '';
+  let amount = attemptedPurchase.amount ?? 0;
+  let mccCode = attemptedPurchase.mccCode;
+  let catalogVersion = attemptedPurchase.productId ? '2026.09.v1' : undefined;
+
+  if (attemptedPurchase.productId) {
+    const catalogItem = resolveCatalogProduct(attemptedPurchase.productId);
+    if (catalogItem) {
+      merchant = catalogItem.merchantName;
+      category = catalogItem.category;
+      mccCode = catalogItem.mcc;
+      amount = catalogItem.unitPricePaise * (attemptedPurchase.quantity || 1);
+      catalogVersion = catalogItem.catalogVersion;
+    }
+  }
+
+  const resolvedAttempt: AttemptedPurchase = {
+    ...attemptedPurchase,
+    merchant,
+    category,
+    amount,
+    mccCode,
+  };
 
   const totalPaise = reserveState.totalPaise ?? reserveState.total ?? 200000;
   const currentHeldPaise = reserveState.heldPaise ?? 0;
@@ -160,42 +185,63 @@ export function guardCheck(
   const currentAvailablePaise =
     reserveState.availablePaise ?? (totalPaise - currentHeldPaise - currentSettledPaise);
 
-  const createTx = (status: Transaction['status'], reason: string): Transaction => {
+  const createTx = (
+    decisionStatus: DecisionStatus,
+    paymentStatus: PaymentStatus,
+    reason: string
+  ): Transaction => {
     let expiresAt: string | undefined;
-    if (status === 'frozen') {
-      const frozenTtl = policy.frozenTtlSeconds ?? 20;
-      expiresAt = new Date(new Date(timestamp).getTime() + frozenTtl * 1000).toISOString();
-    } else if (status === 'reserved') {
+    if (paymentStatus === 'reserved') {
       const reservedTtl = policy.reservedTtlSeconds ?? 900;
       expiresAt = new Date(new Date(timestamp).getTime() + reservedTtl * 1000).toISOString();
+    } else {
+      const frozenTtl = policy.frozenTtlSeconds ?? 20;
+      expiresAt = new Date(new Date(timestamp).getTime() + frozenTtl * 1000).toISOString();
     }
+
+    const legacyStatus: Transaction['status'] =
+      paymentStatus === 'reserved' ? 'reserved' : 'frozen';
 
     return {
       id: txId,
-      merchant: attemptedPurchase.merchant,
-      amount: attemptedPurchase.amount,
-      category: attemptedPurchase.category,
+      merchant,
+      amount,
+      category,
       quantity: attemptedPurchase.quantity,
-      status,
+      status: legacyStatus,
+      decisionStatus,
+      paymentStatus,
+      decision: decisionStatus,
       reason,
       timestamp,
-      mccCode: attemptedPurchase.mccCode,
+      mccCode,
       agentId: attemptedPurchase.agentId,
-      policyId: attemptedPurchase.policyId,
+      policyId: attemptedPurchase.policyId || policy.id || 'default_policy',
+      policyVersion: attemptedPurchase.policyVersion || policy.version || 1,
       razorpayOrderId: attemptedPurchase.razorpayOrderId,
       sessionId: attemptedPurchase.sessionId || policy.sessionId,
-      tenantId: attemptedPurchase.tenantId || policy.tenantId,
+      tenantId: attemptedPurchase.tenantId || policy.tenantId || 'default_tenant',
+      productId: attemptedPurchase.productId,
+      catalogVersion,
       hash: '',
       prevHash: '',
       expiresAt,
     };
   };
 
-  const makeFrozenResult = (reason: string): GuardCheckResult => {
-    const frozenTx = createTx('frozen', reason);
+  const makeDeniedResult = (reason: string, ruleViolated: string, limitPaise?: number): GuardCheckResult => {
+    const deniedTx = createTx('denied', 'failed', reason);
     return {
-      decision: 'freeze',
+      decision: 'denied',
+      decisionStatus: 'denied',
+      paymentStatus: 'failed',
       reason,
+      ruleViolated,
+      limitPaise,
+      requestedPaise: amount,
+      policyId: policy.id || 'default_policy',
+      policyVersion: policy.version || 1,
+      transaction: deniedTx,
       updatedReserveState: {
         ...reserveState,
         totalPaise,
@@ -204,7 +250,33 @@ export function guardCheck(
         availablePaise: currentAvailablePaise,
         total: totalPaise,
         remaining: currentAvailablePaise,
-        transactions: [...reserveState.transactions, frozenTx],
+        transactions: [...reserveState.transactions, deniedTx],
+      },
+    };
+  };
+
+  const makeReviewResult = (reason: string, ruleViolated: string, limitPaise?: number): GuardCheckResult => {
+    const reviewTx = createTx('review', 'requested', reason);
+    return {
+      decision: 'review',
+      decisionStatus: 'review',
+      paymentStatus: 'requested',
+      reason,
+      ruleViolated,
+      limitPaise,
+      requestedPaise: amount,
+      policyId: policy.id || 'default_policy',
+      policyVersion: policy.version || 1,
+      transaction: reviewTx,
+      updatedReserveState: {
+        ...reserveState,
+        totalPaise,
+        heldPaise: currentHeldPaise,
+        settledPaise: currentSettledPaise,
+        availablePaise: currentAvailablePaise,
+        total: totalPaise,
+        remaining: currentAvailablePaise,
+        transactions: [...reserveState.transactions, reviewTx],
       },
     };
   };
@@ -213,44 +285,47 @@ export function guardCheck(
   if (
     policy.allowedMerchants &&
     policy.allowedMerchants.length > 0 &&
-    !isMerchantAllowed(attemptedPurchase.merchant, policy.allowedMerchants)
+    !isMerchantAllowed(merchant, policy.allowedMerchants)
   ) {
-    const reason = `Merchant mismatch: Merchant '${attemptedPurchase.merchant}' is not allowed by policy.`;
-    return makeFrozenResult(reason);
+    const reason = `Merchant mismatch: Merchant '${merchant}' is not allowed by policy.`;
+    return makeDeniedResult(reason, 'MERCHANT_NOT_ALLOWED');
   }
 
   // Rule 2: Category Matching Check
-  if (!isCategoryAllowed(attemptedPurchase, policy)) {
-    const reason = `Category mismatch: Purchase category '${attemptedPurchase.category}' does not match policy category '${policy.category}'.`;
-    return makeFrozenResult(reason);
+  if (!isCategoryAllowed(resolvedAttempt, policy)) {
+    const reason = `Category mismatch: Purchase category '${category}' does not match policy category '${policy.category}'.`;
+    return makeDeniedResult(reason, 'CATEGORY_NOT_ALLOWED');
   }
 
-  // Rule 3a: Multi-Dimensional Quantity & Unit-Price Sanity Check
+  // Rule 3a: Multi-Dimensional Quantity & Unit-Price Sanity Check (Risk-Based Anomaly)
   const reasonableQty = policy.reasonableQuantity ?? 2;
-  const totalAmount = attemptedPurchase.amount;
   const quantity = attemptedPurchase.quantity;
 
   if (quantity !== undefined && quantity > reasonableQty) {
-    const unitPrice = quantity > 0 ? Math.floor(totalAmount / quantity) : totalAmount;
-    // Micro-purchase exception: Use explicitly configured absolute threshold, defaulting to ₹50 (5000 paise)
+    const unitPrice = quantity > 0 ? Math.floor(amount / quantity) : amount;
     const microThreshold = policy.microPurchaseThreshold ?? 5000;
-    const isMicroPurchase = totalAmount <= microThreshold;
+    const isMicroPurchase = amount <= microThreshold;
 
-    if (!isMicroPurchase && quantity > 2 * reasonableQty) {
-      const reason = `Quantity inconsistent: Quantity (${quantity}) at unit price (₹${(unitPrice / 100).toFixed(2)}) exceeds reasonable limit (${reasonableQty}).`;
-      return makeFrozenResult(reason);
+    if (!isMicroPurchase) {
+      if (quantity > 2 * reasonableQty) {
+        const reason = `Quantity anomaly exceeded hard limit: Quantity (${quantity}) at unit price (₹${(unitPrice / 100).toFixed(2)}) exceeds 2x limit (${2 * reasonableQty}).`;
+        return makeDeniedResult(reason, 'QUANTITY_ANOMALY');
+      } else {
+        const reason = `Quantity anomaly review required: Quantity (${quantity}) exceeds expected reasonable limit (${reasonableQty}). Flagged for review.`;
+        return makeReviewResult(reason, 'QUANTITY_ANOMALY');
+      }
     }
   }
 
   // Rule 3b: Amount Ceiling & Fail-Safe Unbounded Check
   if (policy.amountCeiling === undefined) {
     const reason = `Unbounded purchase risk: Policy has no explicit amount ceiling defined. Failsafe activated.`;
-    return makeFrozenResult(reason);
+    return makeDeniedResult(reason, 'UNBOUNDED_CEILING_FAILSAFE');
   }
 
-  if (attemptedPurchase.amount > policy.amountCeiling) {
-    const reason = `Amount ceiling exceeded: Purchase amount (₹${(attemptedPurchase.amount / 100).toFixed(2)}) exceeds policy ceiling (₹${(policy.amountCeiling / 100).toFixed(2)}).`;
-    return makeFrozenResult(reason);
+  if (amount > policy.amountCeiling) {
+    const reason = `Amount ceiling exceeded: Purchase amount (₹${(amount / 100).toFixed(2)}) exceeds policy ceiling (₹${(policy.amountCeiling / 100).toFixed(2)}).`;
+    return makeDeniedResult(reason, 'AMOUNT_CEILING_EXCEEDED', policy.amountCeiling);
   }
 
   // Rule 4: Session-Scoped Cumulative Spend Check
@@ -261,29 +336,36 @@ export function guardCheck(
 
   const cumulativeSpend =
     sessionTransactions
-      .filter((t) => t.status === 'reserved' || t.status === 'authorized' || t.status === 'captured')
-      .reduce((sum, t) => sum + t.amount, 0) + attemptedPurchase.amount;
+      .filter((t) => t.status === 'reserved' || (t.paymentStatus && ['reserved', 'order_created', 'authorized', 'captured'].includes(t.paymentStatus)) || t.status === 'authorized' || t.status === 'captured')
+      .reduce((sum, t) => sum + t.amount, 0) + amount;
 
   const exceedsSessionCap =
     policy.sessionCap !== undefined && cumulativeSpend > policy.sessionCap;
   const exceedsAvailableReserve =
-    attemptedPurchase.amount > currentAvailablePaise;
+    amount > currentAvailablePaise;
 
   if (exceedsSessionCap || exceedsAvailableReserve) {
     const capLimit = policy.sessionCap ?? currentAvailablePaise;
     const reason = `Combined orders exceeding session budget: Cumulative spend (₹${(cumulativeSpend / 100).toFixed(2)}) exceeds session cap (₹${(capLimit / 100).toFixed(2)}).`;
-    return makeFrozenResult(reason);
+    return makeDeniedResult(reason, 'SESSION_CAP_EXCEEDED', capLimit);
   }
 
-  // Rule 5: Default Approval -> 2PC Reservation Created
-  const reason = 'Transaction reserved';
-  const reservedTx = createTx('reserved', reason);
-  const updatedHeldPaise = currentHeldPaise + attemptedPurchase.amount;
+  // Rule 5: Default Approval -> Atomic Reservation Created
+  const reason = 'Transaction authorized & reserved';
+  const reservedTx = createTx('allowed', 'reserved', reason);
+  const updatedHeldPaise = currentHeldPaise + amount;
   const updatedAvailablePaise = totalPaise - updatedHeldPaise - currentSettledPaise;
 
   return {
-    decision: 'approve',
+    decision: 'allowed',
+    decisionStatus: 'allowed',
+    paymentStatus: 'reserved',
     reason,
+    limitPaise: policy.amountCeiling,
+    requestedPaise: amount,
+    policyId: policy.id || 'default_policy',
+    policyVersion: policy.version || 1,
+    transaction: reservedTx,
     updatedReserveState: {
       ...reserveState,
       totalPaise,
@@ -296,4 +378,5 @@ export function guardCheck(
     },
   };
 }
+
 

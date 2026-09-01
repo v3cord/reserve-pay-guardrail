@@ -272,27 +272,39 @@ export function getClientIp(request: Request): string {
   );
 }
 
-export interface AuthenticateRequestOptions {
-  allowedRoles?: AuthRole[];
-  rawBody?: string;
-  requireSignature?: boolean;
-}
-
-export interface AuthResult {
-  authenticated: boolean;
-  context?: AuthContext;
-  error?: string;
-  statusCode?: number;
+/**
+ * Creates a signed JWT for demo session cookies with 30 minute TTL.
+ */
+export function createDemoSessionToken(agentId = 'default_agent', role: AuthRole = 'admin'): string {
+  return generateJwt({
+    sub: 'demo_user',
+    role,
+    agentId,
+  }, 1800); // 30 minutes
 }
 
 /**
- * Authenticates an incoming Next.js Request via X-API-Key or Bearer <JWT>,
+ * Extracts cookie value by name from request Cookie header.
+ */
+export function getCookieValue(request: Request, name: string): string | null {
+  const cookieHeader = request.headers.get('cookie');
+  if (!cookieHeader) return null;
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
+
+/**
+ * Authenticates an incoming Next.js Request via X-API-Key, Bearer <JWT>, or Demo Session Cookie,
  * optionally verifies HMAC payload signature (X-Signature), and validates RBAC permissions.
  */
 export async function authenticateRequest(
   request: Request,
-  options: AuthenticateRequestOptions = {}
+  optionsInput: AuthenticateRequestOptions | AuthRole[] = {}
 ): Promise<AuthResult> {
+  const options: AuthenticateRequestOptions = Array.isArray(optionsInput)
+    ? { allowedRoles: optionsInput }
+    : optionsInput;
+
   const url = new URL(request.url);
   const endpoint = url.pathname;
   const method = request.method;
@@ -301,6 +313,7 @@ export async function authenticateRequest(
   const apiKeyHeader = request.headers.get('x-api-key');
   const authHeader = request.headers.get('authorization');
   const signatureHeader = request.headers.get('x-signature');
+  const sessionCookie = getCookieValue(request, 'reservepay_demo_session') || getCookieValue(request, 'admin_demo_session');
 
   let authContext: AuthContext | null = null;
 
@@ -346,23 +359,37 @@ export async function authenticateRequest(
       agentId: payload.agentId,
       authMethod: 'jwt',
     };
-  } else {
+  }
+  // 3. Check Demo Session Cookie
+  else if (sessionCookie) {
+    const payload = verifyJwt(sessionCookie);
+    if (payload) {
+      authContext = {
+        role: payload.role,
+        identity: payload.sub,
+        agentId: payload.agentId,
+        authMethod: 'jwt',
+      };
+    }
+  }
+
+  if (!authContext) {
     // Missing credentials
     recordSecurityAudit({
       eventType: 'UNAUTHORIZED_ACCESS',
       endpoint,
       method,
-      details: 'Missing authentication credentials (X-API-Key or Authorization: Bearer).',
+      details: 'Missing authentication credentials (X-API-Key, Authorization Bearer, or Session Cookie).',
       ip,
     });
     return {
       authenticated: false,
-      error: 'Unauthorized: Authentication required via X-API-Key or Authorization Bearer header',
+      error: 'Unauthorized: Authentication required via X-API-Key, Authorization Bearer, or session cookie',
       statusCode: 401,
     };
   }
 
-  // 3. Optional / Required HMAC-SHA256 Payload Signature Verification
+  // 4. Optional / Required HMAC-SHA256 Payload Signature Verification
   if (signatureHeader || options.requireSignature) {
     if (!signatureHeader) {
       recordSecurityAudit({
@@ -402,7 +429,7 @@ export async function authenticateRequest(
     }
   }
 
-  // 4. Role-Based Access Control (RBAC) Check
+  // 5. Role-Based Access Control (RBAC) Check
   if (options.allowedRoles && options.allowedRoles.length > 0) {
     if (!options.allowedRoles.includes(authContext.role)) {
       recordSecurityAudit({
@@ -428,3 +455,4 @@ export async function authenticateRequest(
     context: authContext,
   };
 }
+

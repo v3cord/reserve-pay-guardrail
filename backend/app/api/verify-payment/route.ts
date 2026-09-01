@@ -1,31 +1,27 @@
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
-import { settleTransaction, recordSecurityAudit } from '@/lib/store';
-import { authenticateRequest, getClientIp } from '@/lib/auth';
-import { validateRazorpayConfig } from '@/lib/razorpayClient';
+import { settleTransaction, recordSecurityAudit } from '../../../lib/store';
+import { authenticateRequest, getClientIp } from '../../../lib/auth';
+import { validateRazorpayConfig } from '../../../lib/razorpay';
 
 export async function POST(request: Request) {
   try {
     validateRazorpayConfig();
 
     const rawBody = await request.text();
-    // Note: We deliberately do NOT set `requireSignature: true` here because 
-    // Razorpay checkout/webhook flows rely on the `razorpay_signature` in the payload 
-    // body rather than our internal X-Signature header. 
-    // The internal razorpay_signature is verified natively below.
     const auth = await authenticateRequest(request, {
-      allowedRoles: ['ADMIN_ROLE', 'AGENT_ROLE'],
+      allowedRoles: ['admin', 'service', 'agent', 'demo_user'],
       rawBody,
     });
 
-    if (!auth.authenticated) {
+    if (!auth.authenticated || !auth.context) {
       return NextResponse.json(
         { error: auth.error || 'Unauthorized' },
         { status: auth.statusCode || 401 }
       );
     }
 
-    const body = JSON.parse(rawBody);
+    const body = JSON.parse(rawBody || '{}');
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature, agentId } = body;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
@@ -59,33 +55,28 @@ export async function POST(request: Request) {
         identity: auth.context?.identity,
         endpoint: '/api/verify-payment',
         method: 'POST',
-        details: `Invalid Razorpay payment signature for order ${razorpay_order_id}`,
+        details: 'CRITICAL SECURITY: Invalid Razorpay checkout signature verification attempt detected.',
         ip: getClientIp(request),
       });
 
       return NextResponse.json(
-        { error: 'Invalid Razorpay payment signature', verified: false },
+        { error: 'Invalid payment signature verification failed.' },
         { status: 400 }
       );
     }
 
     const targetAgentId = agentId || auth.context?.agentId || 'default_agent';
-    // Settle transaction in store (shifts heldPaise -> settledPaise and marks captured)
     const settleResult = await settleTransaction(razorpay_order_id, razorpay_payment_id, targetAgentId);
 
     return NextResponse.json({
-      status: 'success',
-      verified: true,
-      orderId: razorpay_order_id,
-      paymentId: razorpay_payment_id,
-      updatedReserveState: settleResult.updatedReserveState,
+      status: settleResult.success ? 'captured' : 'error',
+      ...settleResult,
     });
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(
-      { error: 'Failed to verify Razorpay payment', details: errorMsg },
+      { error: 'Failed to verify payment', details: errorMsg },
       { status: 400 }
     );
   }
 }
-

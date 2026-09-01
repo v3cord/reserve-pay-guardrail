@@ -1,4 +1,6 @@
 export interface Policy {
+  id?: string;
+  version?: number;
   amountCeiling?: number; // In integer Paise
   category?: string;
   allowedMerchants: string[];
@@ -13,16 +15,67 @@ export interface Policy {
   reservedTtlSeconds?: number;
 }
 
-export type TransactionStatus =
+export type DecisionStatus = 'allowed' | 'review' | 'denied';
+
+export type PaymentStatus =
+  | 'requested'
   | 'reserved'
+  | 'order_creation_unknown'
+  | 'order_created'
   | 'authorized'
   | 'captured'
-  | 'failed'
-  | 'refunded'
-  | 'frozen'
+  | 'released'
   | 'expired'
-  | 'disputed'
-  | 'approved';
+  | 'failed'
+  | 'partially_refunded'
+  | 'refunded'
+  | 'disputed';
+
+// Backward-compatible alias for existing code
+export type TransactionStatus =
+  | PaymentStatus
+  | 'approved'
+  | 'frozen'
+  | 'skipped';
+
+export interface CatalogProduct {
+  productId: string;
+  merchantId: string;
+  merchantName: string;
+  mcc: string;
+  category: string;
+  unitPricePaise: number;
+  currency: string;
+  catalogVersion: string;
+}
+
+export interface LedgerEvent {
+  id: string;
+  transactionId: string;
+  tenantId: string;
+  agentId: string;
+  eventType:
+    | 'RESERVATION_CREATED'
+    | 'ORDER_ATTACHED'
+    | 'ORDER_UNKNOWN_FLAGGED'
+    | 'ORDER_RECONCILED'
+    | 'PAYMENT_CAPTURED'
+    | 'RESERVATION_RELEASED'
+    | 'RESERVATION_EXPIRED'
+    | 'PAYMENT_REFUNDED'
+    | 'TRANSACTION_DISPUTED'
+    | 'REVIEW_REQUIRED'
+    | 'HUMAN_OVERRIDE_APPROVED'
+    | 'HUMAN_OVERRIDE_DENIED'
+    | 'GUARD_REJECTED';
+  payload: Record<string, unknown>;
+  sequenceNum: number;
+  prevHash: string;
+  hash: string;
+  timestamp: string;
+  policyId?: string;
+  policyVersion?: number;
+}
 
 export interface Transaction {
   id: string;
@@ -31,6 +84,8 @@ export interface Transaction {
   category: string;
   quantity?: number;
   status: TransactionStatus;
+  decisionStatus?: DecisionStatus;
+  paymentStatus?: PaymentStatus;
   reason?: string;
   timestamp: string;
   mccCode?: string;
@@ -40,9 +95,16 @@ export interface Transaction {
   razorpayPaymentId?: string;
   agentId?: string;
   policyId?: string;
+  policyVersion?: number;
   sessionId?: string;
   tenantId?: string;
+  productId?: string;
+  catalogVersion?: string;
+  capturedPaise?: number;
+  refundedPaise?: number;
+  remainingRefundablePaise?: number;
   expiresAt?: string;
+  decision?: DecisionStatus;
 }
 
 export interface ReserveState {
@@ -53,22 +115,27 @@ export interface ReserveState {
   total?: number; // Backward-compatible alias for totalPaise
   remaining?: number; // Backward-compatible alias for availablePaise
   transactions: Transaction[];
+  ledgerEvents?: LedgerEvent[];
   ledgerIntegrity?: {
     isValid: boolean;
     corruptedIndex?: number;
+    reason?: string;
+    totalEventsVerified?: number;
   };
 }
 
 export interface AttemptedPurchase {
   id?: string;
-  merchant: string;
-  amount: number; // In integer Paise
-  category: string;
+  productId?: string;
+  merchant?: string;
+  amount?: number; // In integer Paise
+  category?: string;
   quantity?: number;
   timestamp?: string;
   mccCode?: string;
   agentId?: string;
   policyId?: string;
+  policyVersion?: number;
   razorpayOrderId?: string;
   sessionId?: string;
   tenantId?: string;
@@ -79,9 +146,18 @@ export interface AttemptedPurchase {
 }
 
 export interface GuardCheckResult {
-  decision: 'approve' | 'freeze';
+  decision: DecisionStatus | 'approve' | 'freeze';
+  paymentStatus?: PaymentStatus;
+  decisionStatus?: DecisionStatus;
   reason: string;
+  ruleViolated?: string;
+  limitPaise?: number;
+  requestedPaise?: number;
+  policyId?: string;
+  policyVersion?: number;
   updatedReserveState: ReserveState;
+  ledgerEvent?: LedgerEvent;
+  transaction?: Transaction;
 }
 
 export type AuthRole = 'ADMIN_ROLE' | 'AGENT_ROLE' | 'WEBHOOK_ROLE';
@@ -90,13 +166,23 @@ export interface AuthContext {
   role: AuthRole;
   identity: string;
   agentId?: string;
-  authMethod: 'api_key' | 'jwt' | 'webhook_signature';
+  tenantId?: string;
+  sessionId?: string;
+  authMethod: 'api_key' | 'jwt' | 'webhook_signature' | 'demo_session';
 }
 
 export interface SecurityAuditEvent {
   id?: string;
   timestamp?: string;
-  eventType: 'UNAUTHORIZED_ACCESS' | 'FORBIDDEN_PRIVILEGE_ESCALATION' | 'SIGNATURE_VERIFICATION_FAILED' | 'SECRET_VALIDATION_FAILURE' | 'MANUAL_OVERRIDE_EXECUTED';
+  eventType:
+    | 'UNAUTHORIZED_ACCESS'
+    | 'FORBIDDEN_PRIVILEGE_ESCALATION'
+    | 'SIGNATURE_VERIFICATION_FAILED'
+    | 'SECRET_VALIDATION_FAILURE'
+    | 'MANUAL_OVERRIDE_EXECUTED'
+    | 'RECONCILIATION_TRIGGERED'
+    | 'IDEMPOTENCY_MISMATCH'
+    | 'RATE_LIMIT_EXCEEDED';
   role?: string;
   identity?: string;
   endpoint: string;
@@ -121,6 +207,19 @@ export interface IRedisTokenBucket {
   getRemainingBudget(agentId: string): Promise<number | null>;
   setRemainingBudget(agentId: string, remainingPaise: number): Promise<void>;
   reset(agentId?: string): Promise<void>;
+}
+
+export type IdempotencyStatus = 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'EXPIRED';
+
+export interface IdempotencyRecord {
+  tenantId: string;
+  agentId: string;
+  key: string;
+  requestHash: string;
+  status: IdempotencyStatus;
+  response?: Record<string, unknown> | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SettleResult {
@@ -164,6 +263,7 @@ export interface LedgerIntegrityResult {
   isValid: boolean;
   corruptedIndex?: number;
   reason?: string;
+  totalEventsVerified?: number;
 }
 
 export interface IReserveStore {
@@ -190,7 +290,15 @@ export interface IReserveStore {
   getSecurityAuditLogs(limit?: number): Promise<SecurityAuditEvent[]> | SecurityAuditEvent[];
   rebuildHashChainForAgent?(agentId?: string): Promise<void> | void;
   getLastTransactionHash?(agentId?: string): Promise<string> | string;
+  getLastLedgerEventHash?(agentId?: string): Promise<string> | string;
+  appendLedgerEvent?(event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>): Promise<LedgerEvent> | LedgerEvent;
+  getLedgerEvents?(agentId?: string, limit?: number): Promise<LedgerEvent[]> | LedgerEvent[];
   expireStaleTransactions?(agentId?: string): Promise<number> | number;
+  claimIdempotencyKey?(tenantId: string, agentId: string, key: string, requestHash: string): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown> }>;
+  completeIdempotencyKey?(tenantId: string, agentId: string, key: string, response: Record<string, unknown>): Promise<void>;
+  failIdempotencyKey?(tenantId: string, agentId: string, key: string): Promise<void>;
+  flagOrderCreationUnknown?(txId: string, agentId?: string): Promise<void>;
+  reconcileStaleTransactions?(): Promise<{ reconciledCount: number; releasedCount: number }>;
 }
 
 
