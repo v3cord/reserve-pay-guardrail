@@ -1,4 +1,4 @@
-﻿import { Policy, ReserveState, AttemptedPurchase, GuardCheckResult, Transaction, DecisionStatus, PaymentStatus } from './types';
+import { Policy, ReserveState, AttemptedPurchase, GuardCheckResult, Transaction, DecisionStatus, PaymentStatus } from './types';
 import { resolveCatalogProduct } from './merchantCatalog';
 
 const CORPORATE_SUFFIX_REGEX = /\b(india\s+private\s+limited|private\s+limited|pvt\.?\s+ltd\.?|pvt|ltd|inc|corp|llc|co)\b/gi;
@@ -135,11 +135,24 @@ export function isCategoryAllowed(
 }
 
 export function guardCheck(
-  policy: Policy,
-  reserveState: ReserveState,
-  attemptedPurchase: AttemptedPurchase,
+  arg1: Policy | AttemptedPurchase,
+  arg2: ReserveState | Policy,
+  arg3: AttemptedPurchase | ReserveState,
   authoritativeSessionSpentPaise?: number
 ): GuardCheckResult {
+  let policy: Policy;
+  let reserveState: ReserveState;
+  let attemptedPurchase: AttemptedPurchase;
+
+  if ('allowedMerchants' in arg1 || ('amountCeiling' in arg1 && !('amount' in arg1))) {
+    policy = arg1 as Policy;
+    reserveState = arg2 as ReserveState;
+    attemptedPurchase = arg3 as AttemptedPurchase;
+  } else {
+    attemptedPurchase = arg1 as AttemptedPurchase;
+    policy = arg2 as Policy;
+    reserveState = arg3 as ReserveState;
+  }
   const totalPaise = reserveState.totalPaise ?? reserveState.total ?? 200000;
   const currentHeldPaise = reserveState.heldPaise ?? 0;
   const currentSettledPaise = reserveState.settledPaise ?? 0;
