@@ -72,7 +72,7 @@ export async function setReserveState(
 }
 
 export async function recordTransaction(transaction: Transaction): Promise<Transaction> {
-  const store = getStore() as any;
+  const store = getStore() as unknown as { recordTransaction?: (tx: Transaction) => Promise<Transaction> };
   const res = store.recordTransaction ? await store.recordTransaction(transaction) : transaction;
   await publishUpdate();
   return res;

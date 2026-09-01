@@ -170,11 +170,12 @@ export async function POST(request: Request) {
           },
         });
         razorpayOrderId = order.id;
-      } catch (gatewayErr: any) {
+      } catch (gatewayErr: unknown) {
+        const errorObj = gatewayErr as { code?: string; message?: string };
         const isTimeout =
-          gatewayErr.code === 'ETIMEDOUT' ||
-          gatewayErr.code === 'ECONNRESET' ||
-          gatewayErr.message?.includes('timeout');
+          errorObj.code === 'ETIMEDOUT' ||
+          errorObj.code === 'ECONNRESET' ||
+          errorObj.message?.includes('timeout');
 
         if (isTimeout) {
           await flagOrderCreationUnknown(txId, agentId);
@@ -189,12 +190,13 @@ export async function POST(request: Request) {
             { status: 202 }
           );
         } else {
-          await releaseReservation(txId, `Razorpay order creation failed: ${gatewayErr.message}`, agentId);
+          const detailMsg = errorObj.message || String(gatewayErr);
+          await releaseReservation(txId, `Razorpay order creation failed: ${detailMsg}`, agentId);
           if (idempotencyKey) {
             await failIdempotencyKey(tenantId, agentId, idempotencyKey);
           }
           return NextResponse.json(
-            { error: 'Razorpay order creation rejected by gateway.', details: gatewayErr.message },
+            { error: 'Razorpay order creation rejected by gateway.', details: detailMsg },
             { status: 502 }
           );
         }
@@ -234,7 +236,7 @@ export async function POST(request: Request) {
     }
 
     return NextResponse.json(responsePayload, { status: 200 });
-  } catch (err: any) {
+  } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(
       { error: 'Failed to process purchase', details: errorMsg },

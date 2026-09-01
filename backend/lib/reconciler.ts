@@ -1,13 +1,22 @@
 ﻿import db from './db';
 import { getStore, appendLedgerEvent, releaseReservation } from './store';
 import { getRazorpayClient } from './razorpayClient';
-import { Transaction } from './types';
 
 export interface ReconciliationSummary {
   scannedCount: number;
   orderReconciledCount: number;
   reservationReleasedCount: number;
   errors: string[];
+}
+
+interface ReconcileTxRecord {
+  id: string;
+  agentId: string;
+  amount: number;
+  paymentStatus?: string;
+  status?: string;
+  razorpayOrderId?: string;
+  timestamp: string;
 }
 
 export async function runReconciliation(agentId?: string): Promise<ReconciliationSummary> {
@@ -19,7 +28,7 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
   };
 
   try {
-    let unknownTxs: { id: string; agentId: string; amount: number; paymentStatus?: string; status?: string; razorpayOrderId?: string; timestamp: string }[] = [];
+    let unknownTxs: ReconcileTxRecord[] = [];
 
     if (process.env.STORAGE_TYPE === 'postgres' || process.env.POSTGRES_URL) {
       const store = getStore();
@@ -37,12 +46,12 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
         }));
     } else {
       let query = "SELECT id, agentId, amount, paymentStatus, status, razorpayOrderId, timestamp FROM transactions WHERE paymentStatus = 'order_creation_unknown'";
-      const params: any[] = [];
+      const params: (string | number)[] = [];
       if (agentId) {
         query += ' AND agentId = ?';
         params.push(agentId);
       }
-      unknownTxs = db.prepare(query).all(...params) as any[];
+      unknownTxs = db.prepare(query).all(...params) as ReconcileTxRecord[];
     }
 
     summary.scannedCount = unknownTxs.length;
@@ -51,14 +60,18 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
     for (const tx of unknownTxs) {
       try {
         const receiptRef = tx.id.length > 40 ? tx.id.slice(0, 40) : tx.id;
-        let matchedOrder: any = null;
+        let matchedOrder: { id?: string; amount?: number; status?: string } | null = null;
 
         if (rzp && rzp.orders) {
           try {
-            if (typeof (rzp.orders as any).fetchByReceipt === 'function') {
-              matchedOrder = await (rzp.orders as any).fetchByReceipt(receiptRef);
-            } else if (tx.razorpayOrderId) {
-              matchedOrder = await rzp.orders.fetch(tx.razorpayOrderId);
+            const ordersApi = rzp.orders as unknown as {
+              fetchByReceipt?: (ref: string) => Promise<{ id?: string }>;
+              fetch?: (id: string) => Promise<{ id?: string }>;
+            };
+            if (typeof ordersApi.fetchByReceipt === 'function') {
+              matchedOrder = await ordersApi.fetchByReceipt(receiptRef);
+            } else if (tx.razorpayOrderId && typeof ordersApi.fetch === 'function') {
+              matchedOrder = await ordersApi.fetch(tx.razorpayOrderId);
             }
           } catch {
             matchedOrder = null;
@@ -92,12 +105,14 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
           await releaseReservation(tx.id, 'Reconciliation: Razorpay order was never created on gateway', tx.agentId);
           summary.reservationReleasedCount++;
         }
-      } catch (txErr: any) {
-        summary.errors.push(`Error reconciling tx ${tx.id}: ${txErr.message}`);
+      } catch (txErr: unknown) {
+        const msg = txErr instanceof Error ? txErr.message : String(txErr);
+        summary.errors.push(`Error reconciling tx ${tx.id}: ${msg}`);
       }
     }
-  } catch (err: any) {
-    summary.errors.push(`Reconciliation error: ${err.message}`);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    summary.errors.push(`Reconciliation error: ${msg}`);
   }
 
   return summary;
