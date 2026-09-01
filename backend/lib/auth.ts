@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { AuthRole, AuthContext } from './types';
+import { AuthRole, AuthContext, AuthenticateRequestOptions, AuthResult } from './types';
 import { recordSecurityAudit } from './store';
 
 export const DUMMY_VALUES_SET = new Set([
@@ -15,7 +15,6 @@ export const DUMMY_VALUES_SET = new Set([
   'jwt_secret_placeholder',
 ]);
 
-// Non-production test defaults (used only when NODE_ENV !== 'production')
 const DEV_DEFAULT_AGENT_KEY = 'agent_api_key_default';
 const DEV_DEFAULT_ADMIN_KEY = 'admin_api_key_default';
 const DEV_DEFAULT_AGENT_SECRET = 'agent_hmac_secret_default';
@@ -65,140 +64,59 @@ export function getAdminApiKey(): string {
   return key;
 }
 
-/**
- * Fail-Closed Server Environment Validation.
- * Throws fatal errors in production if required security variables are missing or use dummy values.
- */
 export function validateServerBootstrap(forceCheckProduction?: boolean): void {
   const isProduction = forceCheckProduction !== undefined ? forceCheckProduction : process.env.NODE_ENV === 'production';
-  if (!isProduction) return;
-
-  const requiredKeys: Array<{ name: string; val: string | undefined }> = [
-    { name: 'RAZORPAY_KEY_ID', val: process.env.RAZORPAY_KEY_ID },
-    { name: 'RAZORPAY_KEY_SECRET', val: process.env.RAZORPAY_KEY_SECRET },
-    { name: 'RAZORPAY_WEBHOOK_SECRET', val: process.env.RAZORPAY_WEBHOOK_SECRET },
-    { name: 'ADMIN_API_KEY', val: process.env.ADMIN_API_KEY },
-    { name: 'AGENT_API_KEY', val: process.env.AGENT_API_KEY },
-    { name: 'JWT_SECRET', val: process.env.JWT_SECRET },
-    { name: 'AGENT_HMAC_SECRET', val: process.env.AGENT_HMAC_SECRET || process.env.AGENT_SECRET },
-  ];
-
-  for (const { name, val } of requiredKeys) {
-    if (!val || val.trim().length === 0) {
-      const msg = `Fatal Security Error: Missing required environment variable '${name}' in production.`;
-      recordSecurityAudit({
-        eventType: 'SECRET_VALIDATION_FAILURE',
-        endpoint: 'SYSTEM_BOOTSTRAP',
-        method: 'BOOTSTRAP',
-        details: msg,
-      });
-      throw new Error(msg);
-    }
-    if (DUMMY_VALUES_SET.has(val.trim().toLowerCase())) {
-      const msg = `Fatal Security Error: Insecure dummy secret detected for '${name}' in production.`;
-      recordSecurityAudit({
-        eventType: 'SECRET_VALIDATION_FAILURE',
-        endpoint: 'SYSTEM_BOOTSTRAP',
-        method: 'BOOTSTRAP',
-        details: msg,
-      });
-      throw new Error(msg);
-    }
+  if (isProduction) {
+    getAdminApiKey();
+    getJwtSecret();
   }
 }
 
-// Base64URL encoding/decoding utilities for JWT
-function base64UrlEncode(str: string): string {
-  return Buffer.from(str)
-    .toString('base64')
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-}
-
-function base64UrlDecode(str: string): string {
-  let base64 = str.replace(/-/g, '+').replace(/_/g, '/');
-  while (base64.length % 4) {
-    base64 += '=';
-  }
-  return Buffer.from(base64, 'base64').toString('utf8');
-}
-
-/**
- * Signs a JWT token with HMAC-SHA256.
- */
-export function signJwt(
-  payload: { role: AuthRole; sub?: string; agentId?: string; [key: string]: unknown },
-  expiresInSeconds = 3600
-): string {
+export function generateJwt(payload: Record<string, unknown>, expiresInSeconds = 1800): string {
   const secret = getJwtSecret();
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const fullPayload = {
     ...payload,
-    sub: payload.sub || (payload.role === 'ADMIN_ROLE' ? 'admin_user' : payload.agentId || 'agent_007'),
     iat: now,
     exp: now + expiresInSeconds,
   };
 
-  const encodedHeader = base64UrlEncode(JSON.stringify(header));
-  const encodedPayload = base64UrlEncode(JSON.stringify(fullPayload));
-  const signature = crypto
-    .createHmac('sha256', secret)
-    .update(`${encodedHeader}.${encodedPayload}`)
-    .digest('base64')
-    .replace(/=/g, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-
-  return `${encodedHeader}.${encodedPayload}.${signature}`;
+  const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url');
+  const payloadB64 = Buffer.from(JSON.stringify(fullPayload)).toString('base64url');
+  const data = `${headerB64}.${payloadB64}`;
+  const signature = crypto.createHmac('sha256', secret).update(data).digest('base64url');
+  return `${data}.${signature}`;
 }
 
-/**
- * Verifies and decodes a JWT token. Returns null if invalid or expired.
- */
-export function verifyJwt(token: string): { role: AuthRole; sub: string; agentId?: string; [key: string]: unknown } | null {
+export const signJwt = generateJwt;
+
+export function verifyJwt(token: string): Record<string, any> | null {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return null;
     const [headerB64, payloadB64, signatureB64] = parts;
-
     const secret = getJwtSecret();
-    const expectedSignature = crypto
-      .createHmac('sha256', secret)
-      .update(`${headerB64}.${payloadB64}`)
-      .digest('base64')
-      .replace(/=/g, '')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_');
+    const expectedSig = crypto.createHmac('sha256', secret).update(`${headerB64}.${payloadB64}`).digest('base64url');
 
-    if (signatureB64.length !== expectedSignature.length) return null;
-    if (!crypto.timingSafeEqual(Buffer.from(signatureB64, 'utf8'), Buffer.from(expectedSignature, 'utf8'))) {
+    if (
+      signatureB64.length !== expectedSig.length ||
+      !crypto.timingSafeEqual(Buffer.from(signatureB64, 'utf8'), Buffer.from(expectedSig, 'utf8'))
+    ) {
       return null;
     }
 
-    const payloadJson = base64UrlDecode(payloadB64);
-    const payload = JSON.parse(payloadJson);
-
-    // Expiration check
-    if (payload.exp && typeof payload.exp === 'number') {
-      const now = Math.floor(Date.now() / 1000);
-      if (now > payload.exp) return null;
-    }
-
-    if (!payload.role || (payload.role !== 'ADMIN_ROLE' && payload.role !== 'AGENT_ROLE' && payload.role !== 'WEBHOOK_ROLE')) {
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    const now = Math.floor(Date.now() / 1000);
+    if (payload.exp && payload.exp < now) {
       return null;
     }
-
     return payload;
   } catch {
     return null;
   }
 }
 
-/**
- * Validates an API key and maps to its role and identity.
- */
 export function validateApiKey(apiKey: string): AuthContext | null {
   if (!apiKey || typeof apiKey !== 'string') return null;
 
@@ -206,25 +124,23 @@ export function validateApiKey(apiKey: string): AuthContext | null {
   const adminKey = getAdminApiKey();
   const agentKey = getAgentApiKey();
 
-  // Admin Key check with timing safe equality
   if (
     cleanKey.length === adminKey.length &&
     crypto.timingSafeEqual(Buffer.from(cleanKey, 'utf8'), Buffer.from(adminKey, 'utf8'))
   ) {
     return {
-      role: 'ADMIN_ROLE',
+      role: 'admin',
       identity: 'admin_apikey_client',
       authMethod: 'api_key',
     };
   }
 
-  // Agent Key check with timing safe equality
   if (
     cleanKey.length === agentKey.length &&
     crypto.timingSafeEqual(Buffer.from(cleanKey, 'utf8'), Buffer.from(agentKey, 'utf8'))
   ) {
     return {
-      role: 'AGENT_ROLE',
+      role: 'agent',
       identity: 'agent_apikey_client',
       agentId: 'default_agent',
       authMethod: 'api_key',
@@ -234,9 +150,6 @@ export function validateApiKey(apiKey: string): AuthContext | null {
   return null;
 }
 
-/**
- * Verifies an HMAC-SHA256 payload signature for X-Signature header.
- */
 export function verifyPayloadSignature(
   rawBody: string,
   signatureHeader: string,
@@ -261,9 +174,6 @@ export function verifyPayloadSignature(
   );
 }
 
-/**
- * Helper to extract client IP for auditing.
- */
 export function getClientIp(request: Request): string {
   return (
     request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
@@ -272,20 +182,14 @@ export function getClientIp(request: Request): string {
   );
 }
 
-/**
- * Creates a signed JWT for demo session cookies with 30 minute TTL.
- */
 export function createDemoSessionToken(agentId = 'default_agent', role: AuthRole = 'admin'): string {
   return generateJwt({
     sub: 'demo_user',
     role,
     agentId,
-  }, 1800); // 30 minutes
+  }, 1800);
 }
 
-/**
- * Extracts cookie value by name from request Cookie header.
- */
 export function getCookieValue(request: Request, name: string): string | null {
   const cookieHeader = request.headers.get('cookie');
   if (!cookieHeader) return null;
@@ -293,10 +197,6 @@ export function getCookieValue(request: Request, name: string): string | null {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-/**
- * Authenticates an incoming Next.js Request via X-API-Key, Bearer <JWT>, or Demo Session Cookie,
- * optionally verifies HMAC payload signature (X-Signature), and validates RBAC permissions.
- */
 export async function authenticateRequest(
   request: Request,
   optionsInput: AuthenticateRequestOptions | AuthRole[] = {}
@@ -317,11 +217,10 @@ export async function authenticateRequest(
 
   let authContext: AuthContext | null = null;
 
-  // 1. Check API Key
   if (apiKeyHeader) {
     authContext = validateApiKey(apiKeyHeader);
     if (!authContext) {
-      recordSecurityAudit({
+      await recordSecurityAudit({
         eventType: 'UNAUTHORIZED_ACCESS',
         endpoint,
         method,
@@ -334,13 +233,11 @@ export async function authenticateRequest(
         statusCode: 401,
       };
     }
-  }
-  // 2. Check JWT Bearer Token
-  else if (authHeader && authHeader.startsWith('Bearer ')) {
+  } else if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7).trim();
     const payload = verifyJwt(token);
     if (!payload) {
-      recordSecurityAudit({
+      await recordSecurityAudit({
         eventType: 'UNAUTHORIZED_ACCESS',
         endpoint,
         method,
@@ -354,45 +251,41 @@ export async function authenticateRequest(
       };
     }
     authContext = {
-      role: payload.role,
-      identity: payload.sub,
-      agentId: payload.agentId,
+      role: payload.role as AuthRole,
+      identity: payload.sub as string,
+      agentId: payload.agentId as string | undefined,
       authMethod: 'jwt',
     };
-  }
-  // 3. Check Demo Session Cookie
-  else if (sessionCookie) {
+  } else if (sessionCookie) {
     const payload = verifyJwt(sessionCookie);
     if (payload) {
       authContext = {
-        role: payload.role,
-        identity: payload.sub,
-        agentId: payload.agentId,
-        authMethod: 'jwt',
+        role: payload.role as AuthRole,
+        identity: payload.sub as string,
+        agentId: payload.agentId as string | undefined,
+        authMethod: 'demo_session',
       };
     }
   }
 
   if (!authContext) {
-    // Missing credentials
-    recordSecurityAudit({
+    await recordSecurityAudit({
       eventType: 'UNAUTHORIZED_ACCESS',
       endpoint,
       method,
-      details: 'Missing authentication credentials (X-API-Key, Authorization Bearer, or Session Cookie).',
+      details: 'Missing authentication credentials.',
       ip,
     });
     return {
       authenticated: false,
-      error: 'Unauthorized: Authentication required via X-API-Key, Authorization Bearer, or session cookie',
+      error: 'Unauthorized: Authentication required via API key, Bearer token, or session cookie',
       statusCode: 401,
     };
   }
 
-  // 4. Optional / Required HMAC-SHA256 Payload Signature Verification
   if (signatureHeader || options.requireSignature) {
     if (!signatureHeader) {
-      recordSecurityAudit({
+      await recordSecurityAudit({
         eventType: 'SIGNATURE_VERIFICATION_FAILED',
         role: authContext.role,
         identity: authContext.identity,
@@ -412,7 +305,7 @@ export async function authenticateRequest(
     const isSignatureValid = verifyPayloadSignature(bodyToVerify, signatureHeader);
 
     if (!isSignatureValid) {
-      recordSecurityAudit({
+      await recordSecurityAudit({
         eventType: 'SIGNATURE_VERIFICATION_FAILED',
         role: authContext.role,
         identity: authContext.identity,
@@ -429,22 +322,21 @@ export async function authenticateRequest(
     }
   }
 
-  // 5. Role-Based Access Control (RBAC) Check
   if (options.allowedRoles && options.allowedRoles.length > 0) {
     if (!options.allowedRoles.includes(authContext.role)) {
-      recordSecurityAudit({
+      await recordSecurityAudit({
         eventType: 'FORBIDDEN_PRIVILEGE_ESCALATION',
         role: authContext.role,
         identity: authContext.identity,
         endpoint,
         method,
-        details: `Role '${authContext.role}' is not authorized to access endpoint requiring [${options.allowedRoles.join(', ')}].`,
+        details: `Role '${authContext.role}' is not authorized.`,
         ip,
       });
       return {
         authenticated: false,
         context: authContext,
-        error: `Forbidden: Role '${authContext.role}' does not have permission to perform this action.`,
+        error: `Forbidden: Role '${authContext.role}' does not have permission.`,
         statusCode: 403,
       };
     }
@@ -455,4 +347,3 @@ export async function authenticateRequest(
     context: authContext,
   };
 }
-

@@ -1,34 +1,26 @@
 import { NextResponse } from 'next/server';
-import crypto from 'crypto';
 import {
   processPurchaseAtomic,
-  recordTransaction,
   getReserveState,
   recordSecurityAudit,
+  appendLedgerEvent,
   claimIdempotencyKey,
   completeIdempotencyKey,
   failIdempotencyKey,
+  flagOrderCreationUnknown,
   releaseReservation,
-  flagOrderCreationUnknown
 } from '../../../lib/store';
-import { AttemptedPurchase } from '../../../lib/types';
-import { getRazorpayClient } from '../../../lib/razorpay';
+import { calculatePayloadHash } from '../../../lib/crypto';
 import { authenticateRequest, getClientIp } from '../../../lib/auth';
+import { getRazorpayClient, isMockRazorpayEnabled } from '../../../lib/razorpayClient';
 import { resolveCatalogProduct, CURRENT_CATALOG_VERSION } from '../../../lib/merchantCatalog';
-
-export interface PurchaseRequestBody extends AttemptedPurchase {
-  override?: boolean;
-}
+import { PurchaseRequestBody } from '../../../lib/types';
 
 export async function POST(request: Request) {
-  const tenantId = 'default_tenant';
-  let agentId = 'default_agent';
-  let idempotencyKey: string | null = null;
-
   try {
     const rawBody = await request.text();
     const auth = await authenticateRequest(request, {
-      allowedRoles: ['admin', 'agent', 'service', 'demo_user'],
+      allowedRoles: ['admin', 'service', 'agent', 'demo_user', 'ADMIN_ROLE', 'AGENT_ROLE'],
       rawBody,
     });
 
@@ -39,242 +31,214 @@ export async function POST(request: Request) {
       );
     }
 
-    // Securely derive agentId: Ignore client override unless privileged admin
-    if (auth.context.role === 'admin' || auth.context.role === 'service') {
-      const parsedBody = JSON.parse(rawBody || '{}');
-      agentId = parsedBody.agentId || auth.context.agentId || 'default_agent';
-    } else {
-      agentId = auth.context.agentId || 'default_agent';
-    }
+    const body: PurchaseRequestBody = JSON.parse(rawBody || '{}');
+    const tenantId = body.tenantId || auth.context.tenantId || 'default_tenant';
+    const agentId = body.agentId || auth.context.agentId || 'default_agent';
+    const ip = getClientIp(request);
 
-    const purchase: PurchaseRequestBody = JSON.parse(rawBody);
+    // 1. Authoritative Catalog Lookup
+    let resolvedMerchant = body.merchant;
+    let resolvedCategory = body.category;
+    let resolvedAmount = body.amount;
+    let resolvedMcc = body.mccCode;
+    let catalogVersion = body.catalogVersion;
 
-    // 1. Authoritative Catalog Product Resolution
-    if (purchase.productId) {
-      const product = resolveCatalogProduct(purchase.productId);
-      if (!product) {
+    if (body.productId) {
+      const catalogItem = resolveCatalogProduct(body.productId);
+      if (!catalogItem) {
         return NextResponse.json(
-          { error: `Invalid productId '${purchase.productId}'. Must exist in merchant catalog.` },
+          { error: `Invalid productId '${body.productId}'. Item not found in authoritative merchant catalog.` },
           { status: 400 }
         );
       }
-      purchase.merchant = product.merchant;
-      purchase.category = product.category;
-      purchase.mccCode = product.mcc;
-      purchase.quantity = purchase.quantity || 1;
-      purchase.amount = product.pricePaise * purchase.quantity;
-      purchase.catalogVersion = CURRENT_CATALOG_VERSION;
+      resolvedMerchant = catalogItem.merchantName || catalogItem.merchant;
+      resolvedCategory = catalogItem.category;
+      resolvedMcc = catalogItem.mcc;
+      resolvedAmount = (catalogItem.unitPricePaise || catalogItem.pricePaise || 0) * (body.quantity || 1);
+      catalogVersion = catalogItem.catalogVersion || CURRENT_CATALOG_VERSION;
     }
 
-    if (
-      !purchase ||
-      !purchase.merchant ||
-      typeof purchase.merchant !== 'string' ||
-      purchase.amount === undefined ||
-      purchase.amount === null ||
-      typeof purchase.amount !== 'number' ||
-      isNaN(purchase.amount) ||
-      purchase.amount <= 0 ||
-      !purchase.category ||
-      typeof purchase.category !== 'string'
-    ) {
+    if (!resolvedMerchant || resolvedAmount === undefined || resolvedAmount <= 0) {
       return NextResponse.json(
-        { error: 'Invalid payload: merchant, positive amount (integer paise), and category are required.' },
+        { error: 'Invalid payload: merchant/productId and a valid positive amount are required.' },
         { status: 400 }
       );
     }
 
-    // 2. Durable Idempotency Key Scoping & Verification
-    idempotencyKey = request.headers.get('x-idempotency-key') || purchase.idempotencyKey || null;
-    if (idempotencyKey) {
-      const requestHash = crypto.createHash('sha256').update(rawBody).digest('hex');
-      const claimResult = await claimIdempotencyKey(tenantId, agentId, idempotencyKey, requestHash);
-
-      if (claimResult.status === 'MISMATCH') {
-        return NextResponse.json(
-          { error: 'Conflict: Idempotency key reuse with different request payload.', code: 'IDEMPOTENCY_KEY_REUSE' },
-          { status: 409 }
-        );
-      }
-      if (claimResult.status === 'CACHED' && claimResult.cachedResponse) {
-        return NextResponse.json(claimResult.cachedResponse, {
-          status: 200,
-          headers: { 'X-Cache': 'IDEMPOTENT_HIT' },
-        });
-      }
-      if (claimResult.status === 'PROCESSING') {
-        return NextResponse.json(
-          { error: 'Conflict: A request with this idempotency key is currently processing.', code: 'CONCURRENT_REQUEST_PROCESSING' },
-          { status: 409 }
-        );
-      }
-    }
-
-    // 3. Role-Based Privilege Enforcement for Manual Overrides
-    if (purchase.override) {
-      if (auth.context.role !== 'admin') {
-        await recordSecurityAudit({
-          eventType: 'FORBIDDEN_PRIVILEGE_ESCALATION',
-          role: auth.context.role,
-          identity: auth.context.identity,
-          endpoint: '/api/purchase',
-          method: 'POST',
-          details: 'Client attempted unauthorized manual override on purchase.',
-          ip: getClientIp(request),
-        });
-
-        return NextResponse.json(
-          {
-            error: 'Forbidden: Manual override requires admin privilege.',
-            decision: 'denied',
-            reason: 'Unauthorized override attempt',
-          },
-          { status: 403 }
-        );
-      }
-
-      await recordSecurityAudit({
-        eventType: 'MANUAL_OVERRIDE_EXECUTED',
-        role: auth.context.role,
-        identity: auth.context.identity,
-        endpoint: '/api/purchase',
-        method: 'POST',
-        details: `ADMIN override executed for merchant=${purchase.merchant}, amount=${purchase.amount}`,
-        ip: getClientIp(request),
-      });
-    }
-
-    // Step 1: Run attempted transaction through guardCheck via atomic store reservation
-    const result = await processPurchaseAtomic({
-      ...purchase,
-      agentId,
+    // 2. Durable Idempotency Check
+    const idempotencyKey =
+      (request.headers.get('x-idempotency-key') || body.idempotencyKey || '').trim();
+    const payloadHash = calculatePayloadHash({
       tenantId,
+      agentId,
+      productId: body.productId,
+      merchant: resolvedMerchant,
+      amount: resolvedAmount,
+      category: resolvedCategory,
+      quantity: body.quantity || 1,
     });
 
-    // Step 2: If Blocked / Review: Do NOT issue Razorpay order; 0 funds held
-    if (result.decision === 'denied' || result.decision === 'review') {
-      const responsePayload = {
-        decision: result.decision,
-        decisionStatus: result.decisionStatus,
-        paymentStatus: result.paymentStatus,
-        reason: result.reason,
-        ruleViolated: result.ruleViolated,
-        limitPaise: result.limitPaise,
-        requestedPaise: result.requestedPaise,
-        policyId: result.policyId,
-        policyVersion: result.policyVersion,
-        error: result.decision === 'denied' ? 'Guardrail Rejected' : 'Human Review Required',
-        fundsHeldPaise: 0,
-        updatedReserveState: result.updatedReserveState,
-      };
-
-      if (idempotencyKey) {
-        await completeIdempotencyKey(tenantId, agentId, idempotencyKey, responsePayload);
+    if (idempotencyKey) {
+      const claim = await claimIdempotencyKey(tenantId, agentId, idempotencyKey, payloadHash);
+      if (claim.status === 'CACHED' && claim.cachedResponse) {
+        return NextResponse.json(claim.cachedResponse);
       }
-
-      return NextResponse.json(responsePayload, { status: result.decision === 'denied' ? 403 : 200 });
+      if (claim.status === 'MISMATCH') {
+        return NextResponse.json(
+          { error: '409 Conflict: Idempotency key already used with different request parameters.' },
+          { status: 409 }
+        );
+      }
     }
 
-    // Step 3: If Allowed: local reservation created. Call Razorpay orders.create with 3-Outcome Failure Handling
-    const tx = result.transaction!;
-    const receipt = `rcpt_${tx.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 34)}`;
-    let razorpayOrderId: string | undefined;
+    // 3. Deterministic Local Reservation Engine
+    const purchaseResult = await processPurchaseAtomic({
+      ...body,
+      merchant: resolvedMerchant,
+      category: resolvedCategory || 'General',
+      amount: resolvedAmount,
+      mccCode: resolvedMcc,
+      agentId,
+      tenantId,
+      catalogVersion,
+    });
 
-    try {
-      const razorpay = getRazorpayClient();
-      const order = await razorpay.orders.create({
-        amount: Math.round(purchase.amount),
-        currency: 'INR',
-        receipt,
-        payment_capture: purchase.payment_capture !== undefined ? purchase.payment_capture : 1,
-        notes: {
-          agentId,
-          tenantId,
-          transactionId: tx.id,
-          productId: purchase.productId || 'custom',
-          policyId: tx.policyId || 'default_policy',
-          idempotencyKey: idempotencyKey || receipt,
+    if (purchaseResult.decision === 'denied') {
+      if (idempotencyKey) {
+        await failIdempotencyKey(tenantId, agentId, idempotencyKey);
+      }
+      return NextResponse.json(
+        {
+          decision: 'denied',
+          decisionStatus: 'denied',
+          paymentStatus: 'failed',
+          reason: purchaseResult.reason,
+          ruleViolated: purchaseResult.ruleViolated,
+          limitPaise: purchaseResult.limitPaise,
+          requestedPaise: purchaseResult.requestedPaise,
+          updatedReserveState: purchaseResult.updatedReserveState,
         },
-      });
+        { status: 403 }
+      );
+    }
 
-      razorpayOrderId = order.id;
+    if (purchaseResult.decision === 'review') {
+      const responseData = {
+        decision: 'review',
+        decisionStatus: 'review',
+        paymentStatus: 'requested',
+        reason: purchaseResult.reason,
+        ruleViolated: purchaseResult.ruleViolated,
+        transaction: purchaseResult.transaction,
+        updatedReserveState: purchaseResult.updatedReserveState,
+      };
+      if (idempotencyKey) {
+        await completeIdempotencyKey(tenantId, agentId, idempotencyKey, responseData);
+      }
+      return NextResponse.json(responseData, { status: 200 });
+    }
 
-      // Update reserved transaction record with razorpayOrderId and paymentStatus = order_created
-      tx.razorpayOrderId = razorpayOrderId;
-      tx.paymentStatus = 'order_created';
-      await recordTransaction(tx);
+    // 4. Initiating Razorpay Standard Order Side-Effect
+    const txId = purchaseResult.transaction?.id || `tx_${Date.now()}`;
+    let razorpayOrderId: string | undefined;
+    const isMock = isMockRazorpayEnabled();
 
-    } catch (razorpayErr: any) {
-      const isDefiniteFailure = razorpayErr?.statusCode >= 400 && razorpayErr?.statusCode < 500;
-      const isUnknownFailure = !isDefiniteFailure; // 5xx, network timeout, ECONNRESET
-
-      if (isDefiniteFailure) {
-        // Outcome B: Definite Failure -> Release Reservation Immediately
-        await releaseReservation(tx.id, `Razorpay order creation rejected: ${razorpayErr.message || '4xx Client Error'}`, agentId);
-        if (idempotencyKey) {
-          await failIdempotencyKey(tenantId, agentId, idempotencyKey);
-        }
-        return NextResponse.json({
-          error: 'Razorpay order creation rejected by payment gateway',
-          details: razorpayErr.message,
-          paymentStatus: 'released',
-          reservationReleased: true,
-        }, { status: 400 });
+    if (isMock) {
+      razorpayOrderId = `order_mock_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
+    } else {
+      const rzp = getRazorpayClient();
+      if (!rzp) {
+        await releaseReservation(txId, 'Gateway unavailable', agentId);
+        return NextResponse.json(
+          { error: 'Payment gateway configuration error.' },
+          { status: 500 }
+        );
       }
 
-      if (isUnknownFailure) {
-        if (process.env.NODE_ENV !== 'production') {
-          // Dev Mock Fallback
-          razorpayOrderId = `order_mock_${Date.now()}`;
-          tx.razorpayOrderId = razorpayOrderId;
-          tx.paymentStatus = 'order_created';
-          await recordTransaction(tx);
+      try {
+        const receiptRef = txId.length > 40 ? txId.slice(0, 40) : txId;
+        const order = await rzp.orders.create({
+          amount: resolvedAmount,
+          currency: 'INR',
+          receipt: receiptRef,
+          notes: {
+            agentId,
+            tenantId,
+            txId,
+            productId: body.productId || '',
+            category: resolvedCategory || '',
+          },
+        });
+        razorpayOrderId = order.id;
+      } catch (gatewayErr: any) {
+        const isTimeout =
+          gatewayErr.code === 'ETIMEDOUT' ||
+          gatewayErr.code === 'ECONNRESET' ||
+          gatewayErr.message?.includes('timeout');
+
+        if (isTimeout) {
+          await flagOrderCreationUnknown(txId, agentId);
+          return NextResponse.json(
+            {
+              decision: 'allowed',
+              decisionStatus: 'allowed',
+              paymentStatus: 'order_creation_unknown',
+              reason: 'Payment order creation in indeterminate state. Queued for automatic reconciliation.',
+              transactionId: txId,
+            },
+            { status: 202 }
+          );
         } else {
-          // Outcome C: Unknown Outcome (Timeout) -> Flag for Reconciliation
-          await flagOrderCreationUnknown(tx.id, agentId);
+          await releaseReservation(txId, `Razorpay order creation failed: ${gatewayErr.message}`, agentId);
           if (idempotencyKey) {
             await failIdempotencyKey(tenantId, agentId, idempotencyKey);
           }
-          return NextResponse.json({
-            error: 'Network timeout connecting to Razorpay — transaction queued for background reconciliation',
-            transactionId: tx.id,
-            paymentStatus: 'order_creation_unknown',
-            receipt,
-          }, { status: 202 });
+          return NextResponse.json(
+            { error: 'Razorpay order creation rejected by gateway.', details: gatewayErr.message },
+            { status: 502 }
+          );
         }
       }
     }
 
-    const finalReserveState = await getReserveState(agentId);
+    await appendLedgerEvent({
+      transactionId: txId,
+      tenantId,
+      agentId,
+      eventType: 'ORDER_ATTACHED',
+      payload: {
+        razorpayOrderId,
+        amount: resolvedAmount,
+        merchant: resolvedMerchant,
+      },
+      timestamp: new Date().toISOString(),
+    });
 
-    const successResponse = {
+    const responsePayload = {
       decision: 'allowed',
       decisionStatus: 'allowed',
       paymentStatus: 'order_created',
-      reason: result.reason,
-      transactionId: tx.id,
       razorpayOrderId,
-      receipt,
-      productId: purchase.productId,
-      catalogVersion: purchase.catalogVersion,
-      updatedReserveState: finalReserveState,
+      amount: resolvedAmount,
+      currency: 'INR',
+      transaction: {
+        ...purchaseResult.transaction,
+        razorpayOrderId,
+        paymentStatus: 'order_created',
+      },
+      updatedReserveState: await getReserveState(agentId),
     };
 
     if (idempotencyKey) {
-      await completeIdempotencyKey(tenantId, agentId, idempotencyKey, successResponse);
+      await completeIdempotencyKey(tenantId, agentId, idempotencyKey, responsePayload);
     }
 
-    return NextResponse.json(successResponse, { status: 200 });
-
-  } catch (err: unknown) {
-    if (idempotencyKey) {
-      await failIdempotencyKey(tenantId, agentId, idempotencyKey).catch(() => {});
-    }
+    return NextResponse.json(responsePayload, { status: 200 });
+  } catch (err: any) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
-    console.error('[API /api/purchase Error]:', err);
     return NextResponse.json(
       { error: 'Failed to process purchase', details: errorMsg },
-      { status: 400 }
+      { status: 500 }
     );
   }
 }

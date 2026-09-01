@@ -1,6 +1,7 @@
-import db from './db';
+ï»¿import db from './db';
 import { getStore, appendLedgerEvent, releaseReservation } from './store';
-import { getRazorpayClient } from './razorpay';
+import { getRazorpayClient } from './razorpayClient';
+import { Transaction } from './types';
 
 export interface ReconciliationSummary {
   scannedCount: number;
@@ -9,11 +10,7 @@ export interface ReconciliationSummary {
   errors: string[];
 }
 
-/**
- * Reconciles unknown and stale transactions against Razorpay authoritative records.
- * Resolves 3-outcome branch (SUCCESS, DEFINITE_FAILURE, UNKNOWN_OUTCOME).
- */
-export async function runReconciliation(agentId = 'default_agent'): Promise<ReconciliationSummary> {
+export async function runReconciliation(agentId?: string): Promise<ReconciliationSummary> {
   const summary: ReconciliationSummary = {
     scannedCount: 0,
     orderReconciledCount: 0,
@@ -21,98 +18,86 @@ export async function runReconciliation(agentId = 'default_agent'): Promise<Reco
     errors: [],
   };
 
-  const store = getStore();
-  const now = Date.now();
-  const fiveMinutesAgo = new Date(now - 5 * 60 * 1000).toISOString();
-  const thirtyMinutesAgo = new Date(now - 30 * 60 * 1000).toISOString();
+  try {
+    let unknownTxs: { id: string; agentId: string; amount: number; paymentStatus?: string; status?: string; razorpayOrderId?: string; timestamp: string }[] = [];
 
-  let candidates: Array<{
-    id: string;
-    agentId: string;
-    amount: number;
-    paymentStatus?: string;
-    status?: string;
-    razorpayOrderId?: string;
-    timestamp: string;
-  }> = [];
-
-  if (store.storeType === 'sqlite') {
-    candidates = db.prepare(`
-      SELECT id, agentId, amount, paymentStatus, status, razorpayOrderId, timestamp
-      FROM transactions
-      WHERE (agentId = ? OR agentId = 'default_agent')
-        AND (
-          paymentStatus = 'order_creation_unknown'
-          OR (paymentStatus = 'reserved' AND timestamp < ?)
-          OR (paymentStatus = 'order_created' AND timestamp < ?)
-        )
-    `).all(agentId, fiveMinutesAgo, thirtyMinutesAgo) as any[];
-  } else {
-    const reserveState = await store.getReserveState(agentId);
-    candidates = reserveState.transactions.filter((tx) => {
-      const isUnknown = tx.paymentStatus === 'order_creation_unknown';
-      const isStaleReserved = tx.paymentStatus === 'reserved' && new Date(tx.timestamp).getTime() < (now - 5 * 60 * 1000);
-      const isStaleOrderCreated = tx.paymentStatus === 'order_created' && new Date(tx.timestamp).getTime() < (now - 30 * 60 * 1000);
-      return isUnknown || isStaleReserved || isStaleOrderCreated;
-    });
-  }
-
-  summary.scannedCount = candidates.length;
-
-  for (const candidate of candidates) {
-    try {
-      const razorpay = getRazorpayClient();
-      const receiptRef = `rcpt_${candidate.id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 34)}`;
-
-      let matchedOrder: any = null;
-
-      if (candidate.razorpayOrderId) {
-        try {
-          matchedOrder = await razorpay.orders.fetch(candidate.razorpayOrderId);
-        } catch {
-          matchedOrder = null;
-        }
+    if (process.env.STORAGE_TYPE === 'postgres' || process.env.POSTGRES_URL) {
+      const store = getStore();
+      const state = await store.getReserveState(agentId);
+      unknownTxs = state.transactions
+        .filter((t) => t.paymentStatus === 'order_creation_unknown')
+        .map((t) => ({
+          id: t.id,
+          agentId: t.agentId || 'default_agent',
+          amount: t.amount,
+          paymentStatus: t.paymentStatus,
+          status: t.status,
+          razorpayOrderId: t.razorpayOrderId,
+          timestamp: t.timestamp,
+        }));
+    } else {
+      let query = "SELECT id, agentId, amount, paymentStatus, status, razorpayOrderId, timestamp FROM transactions WHERE paymentStatus = 'order_creation_unknown'";
+      const params: any[] = [];
+      if (agentId) {
+        query += ' AND agentId = ?';
+        params.push(agentId);
       }
+      unknownTxs = db.prepare(query).all(...params) as any[];
+    }
 
-      if (!matchedOrder && (razorpay.orders as any).fetchByReceipt) {
-        try {
-          matchedOrder = await (razorpay.orders as any).fetchByReceipt(receiptRef);
-        } catch {
-          matchedOrder = null;
+    summary.scannedCount = unknownTxs.length;
+    const rzp = getRazorpayClient();
+
+    for (const tx of unknownTxs) {
+      try {
+        const receiptRef = tx.id.length > 40 ? tx.id.slice(0, 40) : tx.id;
+        let matchedOrder: any = null;
+
+        if (rzp && rzp.orders) {
+          try {
+            if (typeof (rzp.orders as any).fetchByReceipt === 'function') {
+              matchedOrder = await (rzp.orders as any).fetchByReceipt(receiptRef);
+            } else if (tx.razorpayOrderId) {
+              matchedOrder = await rzp.orders.fetch(tx.razorpayOrderId);
+            }
+          } catch {
+            matchedOrder = null;
+          }
         }
-      }
 
-      if (matchedOrder && matchedOrder.id) {
-        if (candidate.paymentStatus === 'order_creation_unknown' || candidate.paymentStatus === 'reserved') {
-          if (store.storeType === 'sqlite') {
+        if (matchedOrder && matchedOrder.id) {
+          if (process.env.STORAGE_TYPE !== 'postgres' && !process.env.POSTGRES_URL) {
             db.prepare(`
               UPDATE transactions
-              SET paymentStatus = 'order_created', razorpayOrderId = ?, reason = 'Reconciled from Razorpay authoritative record'
+              SET paymentStatus = 'order_created', razorpayOrderId = ?, reason = 'Reconciled: matched existing Razorpay order'
               WHERE id = ?
-            `).run(matchedOrder.id, candidate.id);
+            `).run(matchedOrder.id, tx.id);
           }
+
           await appendLedgerEvent({
-            transactionId: candidate.id,
+            transactionId: tx.id,
             tenantId: 'default_tenant',
-            agentId: candidate.agentId || agentId,
-            eventType: 'ORDER_RECONCILED_FOUND',
-            payload: { razorpayOrderId: matchedOrder.id, amount: candidate.amount },
+            agentId: tx.agentId || 'default_agent',
+            eventType: 'ORDER_RECONCILED',
+            payload: {
+              reconciliationAction: 'ORDER_MATCHED',
+              razorpayOrderId: matchedOrder.id,
+              amount: tx.amount,
+            },
             timestamp: new Date().toISOString(),
           });
+
           summary.orderReconciledCount++;
+        } else {
+          await releaseReservation(tx.id, 'Reconciliation: Razorpay order was never created on gateway', tx.agentId);
+          summary.reservationReleasedCount++;
         }
-      } else {
-        await releaseReservation(
-          candidate.id,
-          'Reconciliation determined order was never created on Razorpay — reservation released',
-          candidate.agentId || agentId
-        );
-        summary.reservationReleasedCount++;
+      } catch (txErr: any) {
+        summary.errors.push(`Error reconciling tx ${tx.id}: ${txErr.message}`);
       }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      summary.errors.push(`Failed to reconcile tx ${candidate.id}: ${msg}`);
     }
+  } catch (err: any) {
+    summary.errors.push(`Reconciliation error: ${err.message}`);
   }
 
   return summary;

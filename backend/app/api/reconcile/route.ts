@@ -10,7 +10,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const url = new URL(req.url);
-    const agentId = url.searchParams.get('agentId') || auth.identity || 'default_agent';
+    const agentId = url.searchParams.get('agentId') || auth.context?.identity || 'default_agent';
     const summary = await runReconciliation(agentId);
 
     return NextResponse.json({

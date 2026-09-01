@@ -1,4 +1,4 @@
-export interface Policy {
+﻿export interface Policy {
   id?: string;
   version?: number;
   amountCeiling?: number; // In integer Paise
@@ -39,35 +39,43 @@ export type TransactionStatus =
   | 'skipped';
 
 export interface CatalogProduct {
+  id?: string;
   productId: string;
+  name?: string;
   merchantId: string;
   merchantName: string;
+  merchant?: string;
   mcc: string;
   category: string;
   unitPricePaise: number;
+  pricePaise?: number;
   currency: string;
   catalogVersion: string;
 }
+
+export type LedgerEventType =
+  | 'RESERVATION_CREATED'
+  | 'ORDER_ATTACHED'
+  | 'ORDER_UNKNOWN_FLAGGED'
+  | 'ORDER_RECONCILED'
+  | 'ORDER_RECONCILED_FOUND'
+  | 'PAYMENT_CAPTURED'
+  | 'RESERVATION_RELEASED'
+  | 'RESERVATION_EXPIRED'
+  | 'PAYMENT_REFUNDED'
+  | 'PAYMENT_AMOUNT_MISMATCH'
+  | 'TRANSACTION_DISPUTED'
+  | 'REVIEW_REQUIRED'
+  | 'HUMAN_OVERRIDE_APPROVED'
+  | 'HUMAN_OVERRIDE_DENIED'
+  | 'GUARD_REJECTED';
 
 export interface LedgerEvent {
   id: string;
   transactionId: string;
   tenantId: string;
   agentId: string;
-  eventType:
-    | 'RESERVATION_CREATED'
-    | 'ORDER_ATTACHED'
-    | 'ORDER_UNKNOWN_FLAGGED'
-    | 'ORDER_RECONCILED'
-    | 'PAYMENT_CAPTURED'
-    | 'RESERVATION_RELEASED'
-    | 'RESERVATION_EXPIRED'
-    | 'PAYMENT_REFUNDED'
-    | 'TRANSACTION_DISPUTED'
-    | 'REVIEW_REQUIRED'
-    | 'HUMAN_OVERRIDE_APPROVED'
-    | 'HUMAN_OVERRIDE_DENIED'
-    | 'GUARD_REJECTED';
+  eventType: LedgerEventType;
   payload: Record<string, unknown>;
   sequenceNum: number;
   prevHash: string;
@@ -139,10 +147,17 @@ export interface AttemptedPurchase {
   razorpayOrderId?: string;
   sessionId?: string;
   tenantId?: string;
-  payment_capture?: 0 | 1;
+  payment_capture?: 0 | 1 | boolean;
   receipt?: string;
   idempotencyKey?: string;
   expiresAt?: string;
+  override?: boolean;
+  catalogVersion?: string;
+}
+
+export interface PurchaseRequestBody extends AttemptedPurchase {
+  override?: boolean;
+  catalogVersion?: string;
 }
 
 export interface GuardCheckResult {
@@ -160,7 +175,7 @@ export interface GuardCheckResult {
   transaction?: Transaction;
 }
 
-export type AuthRole = 'ADMIN_ROLE' | 'AGENT_ROLE' | 'WEBHOOK_ROLE';
+export type AuthRole = 'admin' | 'service' | 'agent' | 'demo_user' | 'ADMIN_ROLE' | 'AGENT_ROLE' | 'WEBHOOK_ROLE';
 
 export interface AuthContext {
   role: AuthRole;
@@ -169,6 +184,19 @@ export interface AuthContext {
   tenantId?: string;
   sessionId?: string;
   authMethod: 'api_key' | 'jwt' | 'webhook_signature' | 'demo_session';
+}
+
+export interface AuthenticateRequestOptions {
+  allowedRoles?: AuthRole[];
+  requireSignature?: boolean;
+  rawBody?: string;
+}
+
+export interface AuthResult {
+  authenticated: boolean;
+  context?: AuthContext;
+  error?: string;
+  statusCode?: number;
 }
 
 export interface SecurityAuditEvent {
@@ -278,10 +306,9 @@ export interface IReserveStore {
     state: ReserveState | { totalPaise?: number; heldPaise?: number; settledPaise?: number; total?: number; remaining?: number; transactions?: Transaction[] },
     agentId?: string
   ): Promise<ReserveState> | ReserveState;
-  recordTransaction(transaction: Transaction): Promise<Transaction> | Transaction;
-  processPurchaseAtomic(purchase: AttemptedPurchase & { override?: boolean }): Promise<GuardCheckResult> | GuardCheckResult;
-  settleTransaction(txIdOrOrderId: string, razorpayPaymentId?: string, agentId?: string): Promise<SettleResult> | SettleResult;
-  releaseReservation(txIdOrOrderId: string, reason?: string, agentId?: string): Promise<ReleaseResult> | ReleaseResult;
+  processPurchaseAtomic(purchase: AttemptedPurchase, agentId?: string): Promise<GuardCheckResult>;
+  settleTransaction(txIdOrOrderId: string, razorpayPaymentId?: string, agentId?: string): Promise<SettleResult>;
+  releaseReservation(txIdOrOrderId: string, reason?: string, agentId?: string): Promise<ReleaseResult>;
   processRefund(orderIdOrPaymentId: string, refundAmountPaise: number, refundId?: string, reason?: string, agentId?: string): Promise<RefundResult> | RefundResult;
   disputeTransaction(orderIdOrPaymentId: string, disputeReason?: string, agentId?: string): Promise<DisputeResult> | DisputeResult;
   verifyLedgerIntegrity(agentId?: string): Promise<LedgerIntegrityResult> | LedgerIntegrityResult;
@@ -290,15 +317,13 @@ export interface IReserveStore {
   getSecurityAuditLogs(limit?: number): Promise<SecurityAuditEvent[]> | SecurityAuditEvent[];
   rebuildHashChainForAgent?(agentId?: string): Promise<void> | void;
   getLastTransactionHash?(agentId?: string): Promise<string> | string;
-  getLastLedgerEventHash?(agentId?: string): Promise<string> | string;
-  appendLedgerEvent?(event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>): Promise<LedgerEvent> | LedgerEvent;
-  getLedgerEvents?(agentId?: string, limit?: number): Promise<LedgerEvent[]> | LedgerEvent[];
-  expireStaleTransactions?(agentId?: string): Promise<number> | number;
-  claimIdempotencyKey?(tenantId: string, agentId: string, key: string, requestHash: string): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown> }>;
-  completeIdempotencyKey?(tenantId: string, agentId: string, key: string, response: Record<string, unknown>): Promise<void>;
-  failIdempotencyKey?(tenantId: string, agentId: string, key: string): Promise<void>;
-  flagOrderCreationUnknown?(txId: string, agentId?: string): Promise<void>;
+  getLastLedgerEventHash(agentId?: string): Promise<string> | string;
+  appendLedgerEvent(event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>): Promise<LedgerEvent> | LedgerEvent;
+  getLedgerEvents(agentId?: string, limit?: number): Promise<LedgerEvent[]> | LedgerEvent[];
+  expireStaleTransactions(agentId?: string): Promise<number> | number;
+  claimIdempotencyKey(tenantId: string, agentId: string, key: string, requestHash: string): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown> }>;
+  completeIdempotencyKey(tenantId: string, agentId: string, key: string, response: Record<string, unknown>): Promise<void>;
+  failIdempotencyKey(tenantId: string, agentId: string, key: string): Promise<void>;
+  flagOrderCreationUnknown(txId: string, agentId?: string): Promise<void>;
   reconcileStaleTransactions?(): Promise<{ reconciledCount: number; releasedCount: number }>;
 }
-
-

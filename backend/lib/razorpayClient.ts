@@ -1,9 +1,18 @@
-import Razorpay from 'razorpay';
+﻿import Razorpay from 'razorpay';
 import { validateServerBootstrap, DUMMY_VALUES_SET } from './auth';
 
-export function validateRazorpayConfig(forceCheckProduction?: boolean) {
-  validateServerBootstrap(forceCheckProduction);
-  const isProduction = forceCheckProduction !== undefined ? forceCheckProduction : process.env.NODE_ENV === 'production';
+export function isMockRazorpayEnabled(): boolean {
+  const isProduction = process.env.NODE_ENV === 'production';
+  const keyId = process.env.RAZORPAY_KEY_ID;
+  const keySecret = process.env.RAZORPAY_KEY_SECRET;
+
+  if (isProduction) return false;
+  return !keyId || !keySecret || DUMMY_VALUES_SET.has(keyId) || DUMMY_VALUES_SET.has(keySecret);
+}
+
+export function validateRazorpayConfig() {
+  validateServerBootstrap();
+  const isProduction = process.env.NODE_ENV === 'production';
   const keyId = process.env.RAZORPAY_KEY_ID;
   const keySecret = process.env.RAZORPAY_KEY_SECRET;
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
@@ -37,5 +46,3 @@ export function getRazorpayClient() {
     key_secret: key_secret || 'dev_key_secret',
   });
 }
-
-

@@ -160,28 +160,28 @@ export async function handleRequestPurchase(args: {
   // Run atomic guardrail check
   const guardResult = await processPurchaseAtomic(purchasePayload);
 
-  if (guardResult.decision === 'approve') {
+  if (guardResult.decision === 'allowed' || guardResult.decision === 'approve') {
     let razorpayOrderId: string | undefined;
     try {
       const razorpay = getRazorpayClient();
-      const rzpOrder = await razorpay.orders.create({
+      const rzpOrder: any = await (razorpay.orders as any).create({
         amount: amountPaise,
         currency: 'INR',
-        receipt: `rcpt_mcp_${purchasePayload.id}`,
+        receipt: `rcpt_mcp_${purchasePayload.id}`.slice(0, 40),
         notes: {
-          merchant: purchasePayload.merchant,
-          category: purchasePayload.category,
-          agentId,
+          merchant: purchasePayload.merchant || '',
+          category: purchasePayload.category || '',
+          agentId: agentId || '',
         },
       });
-      razorpayOrderId = rzpOrder.id;
+      razorpayOrderId = rzpOrder?.id;
     } catch {
       razorpayOrderId = `order_sim_${Date.now()}`;
     }
 
     return {
       status: 'APPROVED',
-      decision: 'approve',
+      decision: 'allowed',
       razorpayOrderId,
       transactionId: purchasePayload.id,
       amountRupees: (amountPaise / 100).toFixed(2),
@@ -189,7 +189,7 @@ export async function handleRequestPurchase(args: {
       merchant: purchasePayload.merchant,
       category: purchasePayload.category,
       remainingBudgetRupees: (guardResult.updatedReserveState.availablePaise / 100).toFixed(2),
-      message: `Purchase approved! 2PC Reservation created. Order ID: ${razorpayOrderId}`,
+      message: `Purchase approved! Atomic reservation created. Order ID: ${razorpayOrderId}`,
     };
   } else {
     return {

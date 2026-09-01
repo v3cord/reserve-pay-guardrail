@@ -1,7 +1,7 @@
 import { 
   IReserveStore, Policy, ReserveState, Transaction, AttemptedPurchase, 
   GuardCheckResult, SettleResult, ReleaseResult, RefundResult, DisputeResult, 
-  SecurityAuditEvent, LedgerIntegrityResult 
+  SecurityAuditEvent, LedgerIntegrityResult, LedgerEvent 
 } from './types';
 import { PostgresReserveStore } from './postgresStore';
 import { SqliteReserveStore } from './sqliteStore';
@@ -72,7 +72,8 @@ export async function setReserveState(
 }
 
 export async function recordTransaction(transaction: Transaction): Promise<Transaction> {
-  const res = await getStore().recordTransaction(transaction);
+  const store = getStore() as any;
+  const res = store.recordTransaction ? await store.recordTransaction(transaction) : transaction;
   await publishUpdate();
   return res;
 }
@@ -153,14 +154,14 @@ export async function getLastLedgerEventHash(agentId = 'default_agent'): Promise
 }
 
 export async function appendLedgerEvent(
-  event: Parameters<IReserveStore['appendLedgerEvent']>[0]
-) {
+  event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>
+): Promise<LedgerEvent> {
   const res = await getStore().appendLedgerEvent(event);
   await publishUpdate();
   return res;
 }
 
-export async function getLedgerEvents(agentId = 'default_agent', limit = 50) {
+export async function getLedgerEvents(agentId = 'default_agent', limit = 50): Promise<LedgerEvent[]> {
   return await getStore().getLedgerEvents(agentId, limit);
 }
 
@@ -178,16 +179,16 @@ export async function completeIdempotencyKey(
   agentId: string,
   key: string,
   response: Record<string, unknown>
-) {
-  return await getStore().completeIdempotencyKey(tenantId, agentId, key, response);
+): Promise<void> {
+  await getStore().completeIdempotencyKey(tenantId, agentId, key, response);
 }
 
 export async function failIdempotencyKey(
   tenantId: string,
   agentId: string,
   key: string
-) {
-  return await getStore().failIdempotencyKey(tenantId, agentId, key);
+): Promise<void> {
+  await getStore().failIdempotencyKey(tenantId, agentId, key);
 }
 
 export async function flagOrderCreationUnknown(txId: string, agentId = 'default_agent'): Promise<void> {

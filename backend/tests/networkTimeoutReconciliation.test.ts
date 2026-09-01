@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SqliteReserveStore } from '../lib/sqliteStore';
 import { runReconciliation } from '../lib/reconciler';
-import * as razorpayModule from '../lib/razorpay';
+import * as razorpayModule from '../lib/razorpayClient';
 
 describe('Network Timeout & Background Reconciliation Workflow', () => {
   let store: SqliteReserveStore;
@@ -36,7 +36,6 @@ describe('Network Timeout & Background Reconciliation Workflow', () => {
     });
     expect(p.decision).toBe('allowed');
 
-    // Flag transaction as order_creation_unknown (simulating client timeout)
     await store.flagOrderCreationUnknown(txId, testAgent);
 
     let state = await store.getReserveState(testAgent);
@@ -44,7 +43,6 @@ describe('Network Timeout & Background Reconciliation Workflow', () => {
     expect(tx?.paymentStatus).toBe('order_creation_unknown');
     expect(state.heldPaise).toBe(50000);
 
-    // Mock Razorpay SDK returning the matched order
     vi.spyOn(razorpayModule, 'getRazorpayClient').mockReturnValue({
       orders: {
         create: vi.fn(),
@@ -62,7 +60,7 @@ describe('Network Timeout & Background Reconciliation Workflow', () => {
     tx = state.transactions.find(t => t.id === txId);
     expect(tx?.paymentStatus).toBe('order_created');
     expect(tx?.razorpayOrderId).toBe('order_rzp_recon_123');
-    expect(state.heldPaise).toBe(50000); // Funds remain safely reserved for standard capture
+    expect(state.heldPaise).toBe(50000);
   });
 
   it('Compensates and releases reservation when Razorpay order was never created', async () => {
@@ -77,7 +75,6 @@ describe('Network Timeout & Background Reconciliation Workflow', () => {
 
     await store.flagOrderCreationUnknown(txId, testAgent);
 
-    // Mock Razorpay SDK returning null (order never reached gateway)
     vi.spyOn(razorpayModule, 'getRazorpayClient').mockReturnValue({
       orders: {
         create: vi.fn(),
@@ -94,6 +91,6 @@ describe('Network Timeout & Background Reconciliation Workflow', () => {
     const state = await store.getReserveState(testAgent);
     const tx = state.transactions.find(t => t.id === txId);
     expect(tx?.paymentStatus).toBe('released');
-    expect(state.heldPaise).toBe(0); // Funds released back to available budget pool
+    expect(state.heldPaise).toBe(0);
   });
 });

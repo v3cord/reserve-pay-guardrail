@@ -422,7 +422,7 @@ export class PostgresReserveStore implements IReserveStore {
     if (!purchase.override) {
       const activePolicy = await this.getActivePolicy(agentId);
       const capPaise = activePolicy.sessionCap || 200000;
-      const tokenResult = await this.tokenBucket.acquireReserve(agentId, purchase.amount, capPaise);
+      const tokenResult = await this.tokenBucket.acquireReserve(agentId, purchase.amount ?? 0, capPaise);
       if (!tokenResult.allowed) {
         const currentState = await this.getReserveState(agentId, purchase.sessionId);
         return {
@@ -802,6 +802,14 @@ export class PostgresReserveStore implements IReserveStore {
       details: row.details,
       ip: row.ip || undefined,
     }));
+  }
+
+  async expireStaleTransactions(agentId = 'default_agent'): Promise<number> {
+    const res = await this.pool.query(
+      "UPDATE transactions SET status = 'expired', payment_status = 'expired', reason = 'Reservation TTL expired' WHERE agent_id = $1 AND (status = 'reserved' OR payment_status = 'reserved') AND expires_at IS NOT NULL AND expires_at < NOW() RETURNING id",
+      [agentId]
+    );
+    return res.rowCount || 0;
   }
 }
 

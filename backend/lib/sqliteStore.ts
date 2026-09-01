@@ -488,31 +488,32 @@ export class SqliteReserveStore implements IReserveStore {
     purchase: AttemptedPurchase & { override?: boolean }
   ): Promise<GuardCheckResult> {
     const agentId = purchase.agentId || 'default_agent';
+    const purchaseAmount = purchase.amount ?? 0;
 
     // Rate-limiting coordination helper (does NOT decrement monetary source of truth)
     if (!purchase.override) {
       const activePolicy = await this.getActivePolicy(agentId);
       const capPaise = activePolicy.sessionCap || 200000;
-      const tokenResult = await this.tokenBucket.acquireReserve(agentId, purchase.amount, capPaise);
+      const tokenResult = await this.tokenBucket.acquireReserve(agentId, purchaseAmount, capPaise);
       if (!tokenResult.allowed) {
         const txId = purchase.id || `tx_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
         const timestamp = purchase.timestamp || new Date().toISOString();
         const reason = tokenResult.reason || `Rate limit / concurrency budget pool exceeded for agent ${agentId}`;
         const prevHash = this.getLastTransactionHashSync(agentId);
-        const hash = calculateTransactionHash({ id: txId, timestamp, amount: purchase.amount, merchant: purchase.merchant || 'Unknown', status: 'frozen', prevHash });
+        const hash = calculateTransactionHash({ id: txId, timestamp, amount: purchaseAmount, merchant: purchase.merchant || 'Unknown', status: 'frozen', prevHash });
 
         db.prepare(`
           INSERT INTO transactions (id, merchant, amount, category, quantity, status, decisionStatus, paymentStatus, reason, timestamp, mccCode, hash, prevHash, agentId)
           VALUES (?, ?, ?, ?, ?, 'frozen', 'denied', 'failed', ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO NOTHING
-        `).run(txId, purchase.merchant || 'Unknown', purchase.amount, purchase.category || 'General', purchase.quantity ?? null, reason, timestamp, purchase.mccCode ?? null, hash, prevHash, agentId);
+        `).run(txId, purchase.merchant || 'Unknown', purchaseAmount, purchase.category || 'General', purchase.quantity ?? null, reason, timestamp, purchase.mccCode ?? null, hash, prevHash, agentId);
 
         this.appendLedgerEventSync({
           transactionId: txId,
           tenantId: purchase.tenantId || 'default_tenant',
           agentId,
           eventType: 'GUARD_REJECTED',
-          payload: { reason, rule: 'RATE_LIMIT_EXCEEDED', amount: purchase.amount },
+          payload: { reason, rule: 'RATE_LIMIT_EXCEEDED', amount: purchaseAmount },
           timestamp,
         });
 
@@ -536,7 +537,7 @@ export class SqliteReserveStore implements IReserveStore {
         const hash = calculateTransactionHash({
           id: txId,
           timestamp,
-          amount: purchase.amount,
+          amount: purchaseAmount,
           merchant: purchase.merchant || 'Override Merchant',
           status: 'approved',
           prevHash,
@@ -545,7 +546,7 @@ export class SqliteReserveStore implements IReserveStore {
         const approvedTx: Transaction = {
           id: txId,
           merchant: purchase.merchant || 'Override Merchant',
-          amount: purchase.amount,
+          amount: purchaseAmount,
           category: purchase.category || 'General',
           quantity: purchase.quantity,
           status: 'approved',
