@@ -1,13 +1,14 @@
-﻿import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SqliteReserveStore } from '../lib/sqliteStore';
 import { runReconciliation } from '../lib/reconciler';
 import * as razorpayModule from '../lib/razorpayClient';
 
 describe('Network Timeout & Background Reconciliation Workflow', () => {
   let store: SqliteReserveStore;
-  const testAgent = `recon_agent_${Date.now()}`;
+  let testAgent: string;
 
   beforeEach(async () => {
+    testAgent = `recon_agent_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     store = new SqliteReserveStore();
     await store.resetStore(testAgent);
     await store.setReserveState(

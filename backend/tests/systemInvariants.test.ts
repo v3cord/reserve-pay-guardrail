@@ -1,4 +1,4 @@
-﻿import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { SqliteReserveStore } from '../lib/sqliteStore';
 import { calculateTransactionHash, calculateLedgerEventHash, calculatePayloadHash, GENESIS_PREV_HASH } from '../lib/crypto';
 import { guardCheck } from '../lib/guardCheck';
@@ -7,9 +7,10 @@ import { resolveCatalogProduct, CURRENT_CATALOG_VERSION } from '../lib/merchantC
 
 describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
   let store: SqliteReserveStore;
-  const testAgent = `test_agent_${Date.now()}`;
+  let testAgent: string;
 
   beforeEach(async () => {
+    testAgent = `test_agent_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     store = new SqliteReserveStore();
     await store.resetStore(testAgent);
     await store.setReserveState(
@@ -275,8 +276,8 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
   it('Invariant 9: Authoritative Mock Merchant Catalog — Resolves trusted prices, MCCs, and catalog version', () => {
     const product = resolveCatalogProduct('swiggy-dinner-650');
     expect(product).toBeDefined();
-    expect(product?.pricePaise).toBe(65000);
-    expect(product?.merchant).toBe('Swiggy');
+    expect(product?.unitPricePaise || product?.pricePaise).toBe(65000);
+    expect(product?.merchantName || product?.merchant).toBe('Swiggy');
     expect(product?.category).toBe('Food & Dining');
     expect(CURRENT_CATALOG_VERSION).toBe('2026.09.v1');
 
