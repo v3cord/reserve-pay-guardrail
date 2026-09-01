@@ -269,6 +269,8 @@ export function initDatabase() {
       requestHash TEXT NOT NULL,
       status TEXT NOT NULL,
       response TEXT,
+      ownerToken TEXT,
+      leaseExpiresAt TEXT,
       createdAt TEXT NOT NULL,
       updatedAt TEXT NOT NULL,
       PRIMARY KEY (tenantId, agentId, key)
@@ -323,6 +325,8 @@ export function initDatabase() {
   try { db.exec('ALTER TABLE transactions ADD COLUMN capturedPaise INTEGER DEFAULT 0;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN refundedPaise INTEGER DEFAULT 0;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN expiresAt TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE idempotency_keys ADD COLUMN ownerToken TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE idempotency_keys ADD COLUMN leaseExpiresAt TEXT;'); } catch {}
 
   try { db.exec("UPDATE policies SET agentId = 'default_agent' WHERE agentId IS NULL;"); } catch {}
   try { db.exec("UPDATE reserve_state SET agentId = 'default_agent' WHERE agentId IS NULL;"); } catch {}

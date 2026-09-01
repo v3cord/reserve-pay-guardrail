@@ -4,6 +4,7 @@ import {
   getReserveState,
   recordSecurityAudit,
   appendLedgerEvent,
+  attachRazorpayOrder,
   claimIdempotencyKey,
   completeIdempotencyKey,
   failIdempotencyKey,
@@ -203,23 +204,15 @@ export async function POST(request: Request) {
       }
     }
 
-    await appendLedgerEvent({
-      transactionId: txId,
-      tenantId,
-      agentId,
-      eventType: 'ORDER_ATTACHED',
-      payload: {
-        razorpayOrderId,
-        amount: resolvedAmount,
-        merchant: resolvedMerchant,
-      },
-      timestamp: new Date().toISOString(),
-    });
+    if (razorpayOrderId) {
+      await attachRazorpayOrder(txId, razorpayOrderId, agentId);
+    }
 
     const responsePayload = {
       decision: 'allowed',
       decisionStatus: 'allowed',
       paymentStatus: 'order_created',
+      mode: isMock ? ('mock' as const) : ('live' as const),
       razorpayOrderId,
       amount: resolvedAmount,
       currency: 'INR',

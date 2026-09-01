@@ -55,6 +55,7 @@ export interface CatalogProduct {
 
 export type LedgerEventType =
   | 'RESERVATION_CREATED'
+  | 'ORDER_CREATED'
   | 'ORDER_ATTACHED'
   | 'ORDER_UNKNOWN_FLAGGED'
   | 'ORDER_RECONCILED'
@@ -246,6 +247,8 @@ export interface IdempotencyRecord {
   requestHash: string;
   status: IdempotencyStatus;
   response?: Record<string, unknown> | null;
+  ownerToken?: string;
+  leaseExpiresAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -307,6 +310,8 @@ export interface IReserveStore {
     agentId?: string
   ): Promise<ReserveState> | ReserveState;
   processPurchaseAtomic(purchase: AttemptedPurchase, agentId?: string): Promise<GuardCheckResult>;
+  attachRazorpayOrder(txId: string, razorpayOrderId: string, agentId?: string): Promise<void>;
+  claimWebhookEvent(eventId: string, eventType: string, payloadHash: string): Promise<boolean>;
   settleTransaction(txIdOrOrderId: string, razorpayPaymentId?: string, agentId?: string): Promise<SettleResult>;
   releaseReservation(txIdOrOrderId: string, reason?: string, agentId?: string): Promise<ReleaseResult>;
   processRefund(orderIdOrPaymentId: string, refundAmountPaise: number, refundId?: string, reason?: string, agentId?: string): Promise<RefundResult> | RefundResult;
@@ -321,7 +326,7 @@ export interface IReserveStore {
   appendLedgerEvent(event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>): Promise<LedgerEvent> | LedgerEvent;
   getLedgerEvents(agentId?: string, limit?: number): Promise<LedgerEvent[]> | LedgerEvent[];
   expireStaleTransactions(agentId?: string): Promise<number> | number;
-  claimIdempotencyKey(tenantId: string, agentId: string, key: string, requestHash: string): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown> }>;
+  claimIdempotencyKey(tenantId: string, agentId: string, key: string, requestHash: string): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown>; ownerToken?: string }>;
   completeIdempotencyKey(tenantId: string, agentId: string, key: string, response: Record<string, unknown>): Promise<void>;
   failIdempotencyKey(tenantId: string, agentId: string, key: string): Promise<void>;
   flagOrderCreationUnknown(txId: string, agentId?: string): Promise<void>;

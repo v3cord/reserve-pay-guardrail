@@ -8,8 +8,10 @@ import {
   disputeTransaction,
   recordSecurityAudit,
   appendLedgerEvent,
-  getStore
+  claimWebhookEvent,
+  getStore,
 } from '../../../lib/store';
+import { calculatePayloadHash } from '../../../lib/crypto';
 import { validateRazorpayConfig } from '../../../lib/razorpay';
 import { getClientIp } from '../../../lib/auth';
 
@@ -68,19 +70,12 @@ export async function POST(request: Request) {
     const payload = JSON.parse(rawBody);
     const event: string = payload.event;
     const eventId = eventIdHeader || payload.event_id || payload.id || `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+    const payloadHash = calculatePayloadHash(payload);
 
-    // 1. Webhook Deduplication Check
-    const store = getStore();
-    if (store.storeType === 'sqlite') {
-      const existingEvt = db.prepare('SELECT eventId FROM webhook_events WHERE eventId = ?').get(eventId);
-      if (existingEvt) {
-        return NextResponse.json({ status: 'already_processed', eventId }, { status: 200 });
-      }
-      db.prepare('INSERT INTO webhook_events (eventId, eventType, timestamp) VALUES (?, ?, ?)').run(
-        eventId,
-        event,
-        new Date().toISOString()
-      );
+    // 1. Webhook Deduplication Claim (PostgreSQL & SQLite)
+    const isNewEvent = await claimWebhookEvent(eventId, event, payloadHash);
+    if (!isNewEvent) {
+      return NextResponse.json({ status: 'already_processed', eventId }, { status: 200 });
     }
 
     // Extract entities from payload
@@ -94,14 +89,49 @@ export async function POST(request: Request) {
     const identifier = orderId || paymentId;
 
     if (identifier) {
-      if (event === 'payment.captured' || event === 'order.paid') {
+      const state = await getStore().getReserveState();
+      const matchedTx = state.transactions.find(
+        (t) => (orderId && (t.razorpayOrderId === orderId || t.id === orderId)) ||
+               (paymentId && t.razorpayPaymentId === paymentId)
+      );
+
+      if (event === 'payment.authorized') {
+        // Payment authorized: funds remain heldPaise, not moved to settledPaise
+        if (matchedTx) {
+          await appendLedgerEvent({
+            transactionId: matchedTx.id,
+            tenantId: matchedTx.tenantId || 'default_tenant',
+            agentId: matchedTx.agentId || 'default_agent',
+            eventType: 'ORDER_ATTACHED',
+            payload: { status: 'authorized', razorpayPaymentId: paymentId, razorpayOrderId: orderId },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      } else if (event === 'payment.captured' || event === 'order.paid') {
         const capturedAmount = paymentEntity?.amount || orderEntity?.amount;
-        
-        // 2. Triple-Binding Validation
-        const state = await store.getReserveState();
-        const matchedTx = state.transactions.find(t => t.razorpayOrderId === orderId || t.id === orderId || t.razorpayPaymentId === paymentId);
-        
+        const currency = paymentEntity?.currency || orderEntity?.currency || 'INR';
+
+        // Strict Triple-Binding Validation
+        if (currency !== 'INR') {
+          recordSecurityAudit({
+            eventType: 'SECRET_VALIDATION_FAILURE',
+            endpoint: '/api/webhook',
+            method: 'POST',
+            details: `Non-INR currency rejected: ${currency}`,
+            ip: getClientIp(request),
+          });
+          return NextResponse.json({ error: `Unsupported currency: ${currency}` }, { status: 400 });
+        }
+
         if (matchedTx && capturedAmount && matchedTx.amount !== capturedAmount) {
+          recordSecurityAudit({
+            eventType: 'SECRET_VALIDATION_FAILURE',
+            endpoint: '/api/webhook',
+            method: 'POST',
+            details: `Triple-binding mismatch: captured amount ₹${(capturedAmount / 100).toFixed(2)} does not match reservation ₹${(matchedTx.amount / 100).toFixed(2)}`,
+            ip: getClientIp(request),
+          });
+
           await appendLedgerEvent({
             transactionId: matchedTx.id,
             tenantId: 'default_tenant',
@@ -113,23 +143,23 @@ export async function POST(request: Request) {
           return NextResponse.json({ error: 'Triple-binding mismatch: captured amount does not match reservation' }, { status: 400 });
         }
 
-        await settleTransaction(identifier, paymentId);
+        await settleTransaction(identifier, paymentId, matchedTx?.agentId);
       } else if (event === 'payment.failed') {
         const failureReason =
           paymentEntity?.error_description ||
           paymentEntity?.error_reason ||
           `Payment failed via Razorpay Webhook (${event})`;
-        await releaseReservation(identifier, failureReason);
+        await releaseReservation(identifier, failureReason, matchedTx?.agentId);
       } else if (event === 'refund.processed' || event === 'refund.created' || event === 'payment.refunded') {
         const refundAmountPaise = refundEntity?.amount || paymentEntity?.amount_refunded || 0;
         const refundId = refundEntity?.id;
         const refundReason = `Refund processed via Razorpay Webhook (${event})`;
         if (refundAmountPaise > 0) {
-          await processRefund(identifier, refundAmountPaise, refundId, refundReason);
+          await processRefund(identifier, refundAmountPaise, refundId, refundReason, matchedTx?.agentId);
         }
       } else if (event === 'payment.dispute.created' || event === 'payment.dispute.won' || event === 'payment.dispute.lost') {
         const disputeReason = `Payment dispute event: ${event} (Dispute ID: ${disputeEntity?.id || 'N/A'})`;
-        await disputeTransaction(identifier, disputeReason);
+        await disputeTransaction(identifier, disputeReason, matchedTx?.agentId);
       }
     }
 

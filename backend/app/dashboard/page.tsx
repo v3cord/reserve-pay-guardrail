@@ -49,7 +49,16 @@ export default function Home() {
 
   // Load active policy and reserve state on mount & load Razorpay Checkout script
   useEffect(() => {
-    fetchInitialData();
+    const bootSessionAndLoad = async () => {
+      try {
+        await fetch('/api/session', { method: 'POST' });
+      } catch (err) {
+        console.warn('Session bootstrap (using existing session if active):', err);
+      }
+      await fetchInitialData();
+    };
+
+    bootSessionAndLoad();
 
     // Dynamically load Razorpay Checkout script
     if (typeof window !== 'undefined' && !document.getElementById('razorpay-checkout-script')) {
@@ -120,8 +129,8 @@ export default function Home() {
   const triggerRazorpayCheckout = (orderId: string, amountPaise: number, merchantName: string) => {
     // If running without real Razorpay keys, the backend issues a mock order ID.
     // The real Razorpay UI will crash if fed a fake key/order, so we handle it gracefully here.
-    if (orderId.startsWith('order_test_mock_')) {
-      alert(`[Dev Mode] Guardrail Approved!\n\nMock Order ID: ${orderId}\nAmount: ₹${(amountPaise / 100).toFixed(2)}\n\n(In production with real API keys, the Razorpay payment modal would open here)`);
+    if (orderId.startsWith('order_mock_') || orderId.startsWith('order_test_mock_')) {
+      alert(`[Dev Mock Mode] Guardrail Approved & Reserved!\n\nMock Order ID: ${orderId}\nAmount: ₹${(amountPaise / 100).toFixed(2)}\nMerchant: ${merchantName}\n\n(Simulating customer authorization and webhook settlement...)`);
       
       // Simulate a successful verification webhook call
       fetch('/api/verify-payment', {

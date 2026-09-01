@@ -134,42 +134,50 @@ export class PostgresReserveStore implements IReserveStore {
     agentId: string,
     key: string,
     requestHash: string
-  ): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown> }> {
+  ): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown>; ownerToken?: string }> {
+    const ownerToken = `owner_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+    const insertRes = await this.pool.query(`
+      INSERT INTO idempotency_keys (tenant_id, agent_id, key, request_hash, status, owner_token, lease_expires_at, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, 'PROCESSING', $5, NOW() + INTERVAL '30 seconds', NOW(), NOW())
+      ON CONFLICT (tenant_id, agent_id, key) DO NOTHING
+      RETURNING *
+    `, [tenantId, agentId, key, requestHash, ownerToken]);
+
+    if ((insertRes.rowCount ?? 0) > 0) {
+      return { status: 'CLAIMED', ownerToken };
+    }
+
     const res = await this.pool.query(
       'SELECT * FROM idempotency_keys WHERE tenant_id = $1 AND agent_id = $2 AND key = $3',
       [tenantId, agentId, key]
     );
 
-    if (res.rows.length > 0) {
-      const existing = res.rows[0];
-      if (existing.request_hash !== requestHash) {
-        return { status: 'MISMATCH' };
-      }
-      if (existing.status === 'COMPLETED' && existing.response) {
-        const cached = typeof existing.response === 'string' ? JSON.parse(existing.response) : existing.response;
-        return { status: 'CACHED', cachedResponse: cached };
-      }
-      if (existing.status === 'PROCESSING') {
-        const ageMs = Date.now() - new Date(existing.created_at).getTime();
-        if (ageMs > 300000) {
-          await this.pool.query(
-            "UPDATE idempotency_keys SET status = 'PROCESSING', updated_at = NOW() WHERE tenant_id = $1 AND agent_id = $2 AND key = $3",
-            [tenantId, agentId, key]
-          );
-          return { status: 'CLAIMED' };
-        }
-        return { status: 'PROCESSING' };
-      }
-      return { status: 'PROCESSING' };
+    if (res.rows.length === 0) {
+      return { status: 'CLAIMED', ownerToken };
     }
 
-    await this.pool.query(`
-      INSERT INTO idempotency_keys (tenant_id, agent_id, key, request_hash, status, response, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, 'PROCESSING', NULL, NOW(), NOW())
-      ON CONFLICT (tenant_id, agent_id, key) DO NOTHING
-    `, [tenantId, agentId, key, requestHash]);
+    const existing = res.rows[0];
+    if (existing.request_hash !== requestHash) {
+      return { status: 'MISMATCH' };
+    }
+    if (existing.status === 'COMPLETED' && existing.response) {
+      const cached = typeof existing.response === 'string' ? JSON.parse(existing.response) : existing.response;
+      return { status: 'CACHED', cachedResponse: cached };
+    }
 
-    return { status: 'CLAIMED' };
+    const updateRes = await this.pool.query(`
+      UPDATE idempotency_keys
+      SET status = 'PROCESSING', owner_token = $1, lease_expires_at = NOW() + INTERVAL '30 seconds', updated_at = NOW()
+      WHERE tenant_id = $2 AND agent_id = $3 AND key = $4 AND (status = 'FAILED' OR lease_expires_at < NOW() OR lease_expires_at IS NULL)
+      RETURNING *
+    `, [ownerToken, tenantId, agentId, key]);
+
+    if ((updateRes.rowCount ?? 0) > 0) {
+      return { status: 'CLAIMED', ownerToken };
+    }
+
+    return { status: 'PROCESSING' };
   }
 
   async completeIdempotencyKey(
@@ -191,6 +199,34 @@ export class PostgresReserveStore implements IReserveStore {
       SET status = 'FAILED', updated_at = NOW()
       WHERE tenant_id = $1 AND agent_id = $2 AND key = $3
     `, [tenantId, agentId, key]);
+  }
+
+  async claimWebhookEvent(eventId: string, eventType: string, payloadHash: string): Promise<boolean> {
+    const res = await this.pool.query(`
+      INSERT INTO webhook_events (event_id, event_type, payload_hash, received_at, processed_at)
+      VALUES ($1, $2, $3, NOW(), NOW())
+      ON CONFLICT (event_id) DO NOTHING
+      RETURNING event_id
+    `, [eventId, eventType, payloadHash]);
+    return (res.rowCount ?? 0) > 0;
+  }
+
+  async attachRazorpayOrder(txId: string, razorpayOrderId: string, agentId = 'default_agent'): Promise<void> {
+    const timestamp = new Date().toISOString();
+    await this.pool.query(`
+      UPDATE transactions
+      SET razorpay_order_id = $1, payment_status = 'order_created', status = 'reserved'
+      WHERE id = $2 AND agent_id = $3
+    `, [razorpayOrderId, txId, agentId]);
+
+    await this.appendLedgerEvent({
+      transactionId: txId,
+      tenantId: 'default_tenant',
+      agentId,
+      eventType: 'ORDER_ATTACHED',
+      payload: { razorpayOrderId },
+      timestamp,
+    });
   }
 
   async getActivePolicy(agentId = 'default_agent'): Promise<Policy> {
@@ -454,7 +490,16 @@ export class PostgresReserveStore implements IReserveStore {
       const activePolicy = await this.getActivePolicy(agentId);
       const currentState = await this.getReserveState(agentId, purchase.sessionId);
 
-      const result = guardCheck(purchase, activePolicy, currentState);
+      // Authoritative session spend calculation via SQL aggregate under lock (NO LIMIT 100 bug)
+      const activeSessionId = purchase.sessionId || activePolicy.sessionId || 'default_session';
+      const sessionAggRes = await client.query(`
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM transactions
+        WHERE agent_id = $1 AND (session_id = $2 OR session_id IS NULL) AND payment_status IN ('reserved', 'order_creation_unknown', 'order_created', 'authorized', 'captured')
+      `, [agentId, activeSessionId]);
+      const sessionSpentPaise = parseInt(sessionAggRes.rows[0]?.total ?? '0', 10);
+
+      const result = guardCheck(activePolicy, currentState, purchase, sessionSpentPaise);
 
       if (result.decision === 'allowed') {
         const tx = result.transaction!;
@@ -536,10 +581,14 @@ export class PostgresReserveStore implements IReserveStore {
       const tx = txRes.rows[0];
       const amount = parseInt(tx.amount, 10);
 
-      await client.query(
-        "UPDATE transactions SET status = 'captured', decision_status = 'allowed', payment_status = 'captured', razorpay_payment_id = $1, captured_paise = $2 WHERE id = $3",
-        [razorpayPaymentId || null, amount, tx.id]
-      );
+      await client.query(`
+        UPDATE transactions
+        SET status = 'captured',
+            payment_status = 'captured',
+            captured_paise = $1,
+            razorpay_payment_id = COALESCE($2, razorpay_payment_id)
+        WHERE id = $3
+      `, [amount, razorpayPaymentId ?? null, tx.id]);
 
       if (tx.status === 'reserved' || tx.payment_status === 'reserved' || tx.payment_status === 'order_created' || tx.payment_status === 'authorized') {
         await client.query(
@@ -582,7 +631,7 @@ export class PostgresReserveStore implements IReserveStore {
       const amount = parseInt(tx.amount, 10);
 
       await client.query(
-        "UPDATE transactions SET status = 'expired', payment_status = 'released', reason = $1 WHERE id = $2",
+        "UPDATE transactions SET status = 'released', payment_status = 'released', decision_status = 'allowed', reason = $1 WHERE id = $2",
         [reason, tx.id]
       );
 

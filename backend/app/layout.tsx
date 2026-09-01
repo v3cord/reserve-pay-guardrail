@@ -36,8 +36,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Reserve Pay Guardrail // Two-Phase Commit Controller",
-  description: "The Layer Between Agent Decides and Money Moves — Real-time 2PC Reservation State Machine with Integer Paise Ledger & SHA-256 Verification",
+  title: "Reserve Pay Guardrail // Autonomous AI Commerce Financial Policy Engine",
+  description: "The Layer Between Agent Decides and Money Moves — Atomic Reservation + Compensating Payment Workflow with Integer Paise Ledger & SHA-256 Verification",
   icons: {
     icon: "https://framerusercontent.com/images/OgsUEuFRkZSTBJlB7D7f76yV6Y.png",
   },

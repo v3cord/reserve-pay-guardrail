@@ -1,5 +1,5 @@
-﻿import db from './db';
-import { getStore, appendLedgerEvent, releaseReservation } from './store';
+import db, { getPgPool } from './db';
+import { attachRazorpayOrder, appendLedgerEvent, releaseReservation } from './store';
 import { getRazorpayClient } from './razorpayClient';
 
 export interface ReconciliationSummary {
@@ -31,19 +31,23 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
     let unknownTxs: ReconcileTxRecord[] = [];
 
     if (process.env.STORAGE_TYPE === 'postgres' || process.env.POSTGRES_URL) {
-      const store = getStore();
-      const state = await store.getReserveState(agentId);
-      unknownTxs = state.transactions
-        .filter((t) => t.paymentStatus === 'order_creation_unknown')
-        .map((t) => ({
-          id: t.id,
-          agentId: t.agentId || 'default_agent',
-          amount: t.amount,
-          paymentStatus: t.paymentStatus,
-          status: t.status,
-          razorpayOrderId: t.razorpayOrderId,
-          timestamp: t.timestamp,
-        }));
+      const pool = getPgPool();
+      let query = "SELECT id, agent_id, amount, payment_status, status, razorpay_order_id, timestamp FROM transactions WHERE payment_status = 'order_creation_unknown'";
+      const params: (string | number)[] = [];
+      if (agentId) {
+        query += ' AND agent_id = $1';
+        params.push(agentId);
+      }
+      const res = await pool.query(query, params);
+      unknownTxs = res.rows.map((r: { id: string; agent_id: string; amount: string | number; payment_status?: string; status?: string; razorpay_order_id?: string; timestamp: string }) => ({
+        id: r.id,
+        agentId: r.agent_id || 'default_agent',
+        amount: typeof r.amount === 'string' ? parseInt(r.amount, 10) : r.amount,
+        paymentStatus: r.payment_status,
+        status: r.status,
+        razorpayOrderId: r.razorpay_order_id,
+        timestamp: new Date(r.timestamp).toISOString(),
+      }));
     } else {
       let query = "SELECT id, agentId, amount, paymentStatus, status, razorpayOrderId, timestamp FROM transactions WHERE paymentStatus = 'order_creation_unknown'";
       const params: (string | number)[] = [];
@@ -79,13 +83,7 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
         }
 
         if (matchedOrder && matchedOrder.id) {
-          if (process.env.STORAGE_TYPE !== 'postgres' && !process.env.POSTGRES_URL) {
-            db.prepare(`
-              UPDATE transactions
-              SET paymentStatus = 'order_created', razorpayOrderId = ?, reason = 'Reconciled: matched existing Razorpay order'
-              WHERE id = ?
-            `).run(matchedOrder.id, tx.id);
-          }
+          await attachRazorpayOrder(tx.id, matchedOrder.id, tx.agentId);
 
           await appendLedgerEvent({
             transactionId: tx.id,

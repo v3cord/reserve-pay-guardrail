@@ -196,6 +196,23 @@ export async function flagOrderCreationUnknown(txId: string, agentId = 'default_
   await publishUpdate();
 }
 
+export async function attachRazorpayOrder(
+  txId: string,
+  razorpayOrderId: string,
+  agentId = 'default_agent'
+): Promise<void> {
+  await getStore().attachRazorpayOrder(txId, razorpayOrderId, agentId);
+  await publishUpdate();
+}
+
+export async function claimWebhookEvent(
+  eventId: string,
+  eventType: string,
+  payloadHash: string
+): Promise<boolean> {
+  return await getStore().claimWebhookEvent(eventId, eventType, payloadHash);
+}
+
 export async function rebuildHashChainForAgent(agentId = 'default_agent'): Promise<void> {
   const store = getStore();
   if (store.rebuildHashChainForAgent) {

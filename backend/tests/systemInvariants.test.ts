@@ -196,32 +196,32 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
     };
 
     // Case A: Exceeding amount ceiling -> DENIED
-    const r1 = guardCheck({ amount: 60000, merchant: 'Swiggy', category: 'Groceries', mccCode: '5411' }, policy, currentState);
+    const r1 = guardCheck(policy, currentState, { amount: 60000, merchant: 'Swiggy', category: 'Groceries', mccCode: '5411' });
     expect(r1.decision).toBe('denied');
     expect(r1.ruleViolated).toBe('AMOUNT_CEILING_EXCEEDED');
 
     // Case B: Unallowed Merchant -> DENIED
-    const r2 = guardCheck({ amount: 30000, merchant: 'Uber', category: 'Groceries', mccCode: '5411' }, policy, currentState);
+    const r2 = guardCheck(policy, currentState, { amount: 30000, merchant: 'Uber', category: 'Groceries', mccCode: '5411' });
     expect(r2.decision).toBe('denied');
     expect(r2.ruleViolated).toBe('MERCHANT_NOT_ALLOWED');
 
     // Case C: Unallowed Category and MCC -> DENIED
-    const r3 = guardCheck({ amount: 30000, merchant: 'Swiggy', category: 'Electronics', mccCode: '5732' }, policy, currentState);
+    const r3 = guardCheck(policy, currentState, { amount: 30000, merchant: 'Swiggy', category: 'Electronics', mccCode: '5732' });
     expect(r3.decision).toBe('denied');
     expect(r3.ruleViolated).toBe('CATEGORY_NOT_ALLOWED');
 
     // Case D: Quantity Anomaly (> reasonableQuantity) -> REVIEW
-    const r4 = guardCheck({ amount: 30000, merchant: 'Swiggy', category: 'Groceries', quantity: 5, mccCode: '5411' }, policy, currentState);
+    const r4 = guardCheck(policy, currentState, { amount: 30000, merchant: 'Swiggy', category: 'Groceries', quantity: 5, mccCode: '5411' });
     expect(r4.decision).toBe('review');
     expect(r4.ruleViolated).toBe('QUANTITY_ANOMALY');
 
     // Case E: Extreme Quantity Anomaly (> 2 * reasonableQuantity) -> DENIED
-    const r5 = guardCheck({ amount: 30000, merchant: 'Swiggy', category: 'Groceries', quantity: 10, mccCode: '5411' }, policy, currentState);
+    const r5 = guardCheck(policy, currentState, { amount: 30000, merchant: 'Swiggy', category: 'Groceries', quantity: 10, mccCode: '5411' });
     expect(r5.decision).toBe('denied');
     expect(r5.ruleViolated).toBe('QUANTITY_ANOMALY');
 
     // Case F: Valid Transaction -> ALLOWED
-    const r6 = guardCheck({ amount: 30000, merchant: 'Swiggy', category: 'Groceries', quantity: 2, mccCode: '5411' }, policy, currentState);
+    const r6 = guardCheck(policy, currentState, { amount: 30000, merchant: 'Swiggy', category: 'Groceries', quantity: 2, mccCode: '5411' });
     expect(r6.decision).toBe('allowed');
   });
 

@@ -1,4 +1,4 @@
-﻿# Reserve Pay Guardrail
+# Reserve Pay Guardrail
 
 > **The Financial Policy Engine & Guardrail for Autonomous AI Commerce**
 
@@ -90,7 +90,7 @@ Unlike fragile distributed two-phase commits across third-party payment gateways
 - Every state transition (`RESERVATION_CREATED`, `ORDER_CREATED`, `PAYMENT_CAPTURED`, `RESERVATION_RELEASED`, `REFUND_PROCESSED`) is logged to an immutable `ledger_events` table.
 - Each event is cryptographically chained:
   $$\text{Hash}_N = \text{SHA-256}(\text{ID} \parallel \text{TxID} \parallel \text{EventType} \parallel \text{Seq} \parallel \text{PayloadHash} \parallel \text{PrevHash}_{N-1})$$
-- State updates on mutable transaction rows (e.g. `reserved` -> `captured`) do not mutate historic ledger records, completely eliminating false tamper alerts while ensuring full non-repudiation.
+- State updates on mutable transaction rows (e.g. `reserved` -> `captured`) do not mutate historic ledger records, completely eliminating false tamper alerts while ensuring a tamper-evident, append-only cryptographic event history.
 
 ### 4. Zero Client-Side Credentials
 - The browser dashboard and client components never possess or store administrative keys.

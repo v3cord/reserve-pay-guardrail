@@ -190,39 +190,56 @@ export class SqliteReserveStore implements IReserveStore {
     agentId: string,
     key: string,
     requestHash: string
-  ): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown> }> {
-    const now = new Date().toISOString();
+  ): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown>; ownerToken?: string }> {
+    const now = new Date();
+    const nowStr = now.toISOString();
+    const leaseExpiresAt = new Date(now.getTime() + 30000).toISOString();
+    const ownerToken = `owner_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
+    const insertInfo = db.prepare(`
+      INSERT INTO idempotency_keys (tenantId, agentId, key, requestHash, status, ownerToken, leaseExpiresAt, createdAt, updatedAt)
+      VALUES (?, ?, ?, ?, 'PROCESSING', ?, ?, ?, ?)
+      ON CONFLICT(tenantId, agentId, key) DO NOTHING
+    `).run(tenantId, agentId, key, requestHash, ownerToken, leaseExpiresAt, nowStr, nowStr);
+
+    if (insertInfo.changes > 0) {
+      return { status: 'CLAIMED', ownerToken };
+    }
+
     const existing = db
       .prepare('SELECT * FROM idempotency_keys WHERE tenantId = ? AND agentId = ? AND key = ?')
       .get(tenantId, agentId, key) as any;
 
-    if (existing) {
-      if (existing.requestHash !== requestHash) {
-        return { status: 'MISMATCH' };
-      }
-      if (existing.status === 'COMPLETED' && existing.response) {
-        const cached = typeof existing.response === 'string' ? JSON.parse(existing.response) : existing.response;
-        return { status: 'CACHED', cachedResponse: cached };
-      }
-      if (existing.status === 'PROCESSING') {
-        const ageMs = Date.now() - new Date(existing.createdAt).getTime();
-        if (ageMs > 300000) {
-          // Stale processing (> 5 min) -> reclaim
-          db.prepare('UPDATE idempotency_keys SET status = "PROCESSING", updatedAt = ? WHERE tenantId = ? AND agentId = ? AND key = ?')
-            .run(now, tenantId, agentId, key);
-          return { status: 'CLAIMED' };
-        }
-        return { status: 'PROCESSING' };
-      }
-      return { status: 'PROCESSING' };
+    if (!existing) {
+      return { status: 'CLAIMED', ownerToken };
     }
 
-    db.prepare(`
-      INSERT INTO idempotency_keys (tenantId, agentId, key, requestHash, status, response, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, 'PROCESSING', NULL, ?, ?)
-    `).run(tenantId, agentId, key, requestHash, now, now);
+    if (existing.requestHash !== requestHash) {
+      return { status: 'MISMATCH' };
+    }
 
-    return { status: 'CLAIMED' };
+    if (existing.status === 'COMPLETED' && existing.response) {
+      const cached = typeof existing.response === 'string' ? JSON.parse(existing.response) : existing.response;
+      return { status: 'CACHED', cachedResponse: cached };
+    }
+
+    const isLeaseExpired = existing.leaseExpiresAt
+      ? new Date(existing.leaseExpiresAt).getTime() < now.getTime()
+      : Date.now() - new Date(existing.createdAt).getTime() > 30000;
+
+    if (existing.status === 'FAILED' || isLeaseExpired) {
+      const updateInfo = db.prepare(`
+        UPDATE idempotency_keys
+        SET status = 'PROCESSING', ownerToken = ?, leaseExpiresAt = ?, updatedAt = ?
+        WHERE tenantId = ? AND agentId = ? AND key = ? AND (status = 'FAILED' OR leaseExpiresAt < ? OR leaseExpiresAt IS NULL)
+      `).run(ownerToken, leaseExpiresAt, nowStr, tenantId, agentId, key, nowStr);
+
+      if (updateInfo.changes > 0) {
+        return { status: 'CLAIMED', ownerToken };
+      }
+    }
+
+    return { status: 'PROCESSING' };
   }
 
   async completeIdempotencyKey(
@@ -239,13 +256,45 @@ export class SqliteReserveStore implements IReserveStore {
     `).run(JSON.stringify(response), now, tenantId, agentId, key);
   }
 
-  async failIdempotencyKey(tenantId: string, agentId: string, key: string): Promise<void> {
+  async failIdempotencyKey(
+    tenantId: string,
+    agentId: string,
+    key: string
+  ): Promise<void> {
     const now = new Date().toISOString();
     db.prepare(`
       UPDATE idempotency_keys
       SET status = 'FAILED', updatedAt = ?
       WHERE tenantId = ? AND agentId = ? AND key = ?
     `).run(now, tenantId, agentId, key);
+  }
+
+  async claimWebhookEvent(eventId: string, eventType: string, payloadHash: string): Promise<boolean> {
+    const now = new Date().toISOString();
+    const info = db.prepare(`
+      INSERT INTO webhook_events (eventId, eventType, payloadHash, receivedAt, processedAt)
+      VALUES (?, ?, ?, ?, ?)
+      ON CONFLICT(eventId) DO NOTHING
+    `).run(eventId, eventType, payloadHash, now, now);
+    return info.changes > 0;
+  }
+
+  async attachRazorpayOrder(txId: string, razorpayOrderId: string, agentId = 'default_agent'): Promise<void> {
+    const now = new Date().toISOString();
+    db.prepare(`
+      UPDATE transactions
+      SET razorpayOrderId = ?, paymentStatus = 'order_created', status = 'reserved'
+      WHERE id = ? AND agentId = ?
+    `).run(razorpayOrderId, txId, agentId);
+
+    this.appendLedgerEventSync({
+      transactionId: txId,
+      tenantId: 'default_tenant',
+      agentId,
+      eventType: 'ORDER_ATTACHED',
+      payload: { razorpayOrderId },
+      timestamp: now,
+    });
   }
 
   async getActivePolicy(agentId = 'default_agent'): Promise<Policy> {
@@ -603,12 +652,19 @@ export class SqliteReserveStore implements IReserveStore {
         };
       }
 
-      // 1. Authoritative session spend calculation via SQL aggregate under transaction lock
+      // 1. Authoritative session spend calculation via SQL aggregate under transaction lock (NO LIMIT 100 bug)
       const activePolicy = this.getActivePolicySync(agentId);
       const currentState = this.getReserveStateSync(agentId, purchase.sessionId);
+      const activeSessionId = purchase.sessionId || activePolicy.sessionId || 'default_session';
+      const sessionAgg = db.prepare(`
+        SELECT COALESCE(SUM(amount), 0) AS total
+        FROM transactions
+        WHERE agentId = ? AND (sessionId = ? OR sessionId IS NULL) AND paymentStatus IN ('reserved', 'order_creation_unknown', 'order_created', 'authorized', 'captured')
+      `).get(agentId, activeSessionId) as any;
+      const sessionSpentPaise = sessionAgg?.total ?? 0;
 
-      // 2. Deterministic Guardrail Check
-      const result = guardCheck(purchase, activePolicy, currentState);
+      // 2. Deterministic Multi-Factor Guardrail Check
+      const result = guardCheck(activePolicy, currentState, purchase, sessionSpentPaise);
 
       if (result.decision === 'allowed') {
         const tx = result.transaction!;
@@ -833,7 +889,7 @@ export class SqliteReserveStore implements IReserveStore {
     if (tx.status === 'reserved' || tx.paymentStatus === 'reserved' || tx.paymentStatus === 'order_creation_unknown' || tx.paymentStatus === 'order_created') {
       db.prepare(`
         UPDATE transactions
-        SET status = 'expired', paymentStatus = 'released', reason = ?
+        SET status = 'released', paymentStatus = 'released', decisionStatus = 'allowed', reason = ?
         WHERE id = ?
       `).run(reason, tx.id);
 
