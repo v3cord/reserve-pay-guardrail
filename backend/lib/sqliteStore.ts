@@ -948,7 +948,7 @@ export class SqliteReserveStore implements IReserveStore {
 
     while (true) {
       const rows = db
-        .prepare("SELECT * FROM ledger_events WHERE agentId = ? ORDER BY rowid ASC LIMIT ? OFFSET ?")
+        .prepare("SELECT * FROM ledger_events WHERE agentId = ? ORDER BY sequenceNum ASC LIMIT ? OFFSET ?")
         .all(agentId, batchSize, offset) as any[];
       if (rows.length === 0) break;
 

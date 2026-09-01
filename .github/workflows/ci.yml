@@ -1,4 +1,4 @@
-﻿name: CI & Security Verification
+name: CI & Security Verification
 
 on:
   push:
@@ -44,7 +44,7 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run Financial System Invariant Tests
-        run: npm test
+        run: npx vitest run --reporter=verbose
         env:
           NODE_ENV: test
           RAZORPAY_KEY_ID: rzp_test_ci_mock_id
