@@ -44,4 +44,10 @@ jobs:
         run: npx tsc --noEmit
 
       - name: Run Financial System Invariant Tests
-        run: npx vitest run
+        run: npm test
+        env:
+          NODE_ENV: test
+          RAZORPAY_KEY_ID: rzp_test_ci_mock_id
+          RAZORPAY_KEY_SECRET: dev_key_secret_for_testing
+          JWT_SECRET: ci_test_jwt_secret_key_12345
+          ADMIN_API_KEY: ci_test_admin_api_key_12345
