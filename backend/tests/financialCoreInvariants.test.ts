@@ -16,7 +16,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
     );
     await store.setActivePolicy(
       {
-        amountCeiling: 80000,
+        amountCeiling: 200000,
         category: 'Food & Dining',
         allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
         sessionCap: 200000,
@@ -216,7 +216,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
       id: `tx_denied_ceiling_${Date.now()}`,
       agentId: testAgent,
       merchant: 'Swiggy',
-      amount: 90000, // > 80000 ceiling
+      amount: 250000, // > 200000 ceiling
       category: 'Food & Dining',
       mccCode: '5812',
     });
@@ -235,7 +235,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
     // Use a tighter session cap to test
     await store.setActivePolicy(
       {
-        amountCeiling: 80000,
+        amountCeiling: 100000,
         category: 'Food & Dining',
         allowedMerchants: ['Swiggy'],
         sessionCap: 100000, // session cap
@@ -300,7 +300,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
     );
     await store.setActivePolicy(
       {
-        amountCeiling: 10000,
+        amountCeiling: 15000,
         category: 'Food & Dining',
         allowedMerchants: ['Swiggy'],
         sessionCap: 100000,

@@ -307,7 +307,7 @@ export class SqliteReserveStore implements IReserveStore {
       WHERE id = ? AND agentId = ?
     `).run(razorpayOrderId, txId, agentId);
 
-    this.appendLedgerEventSync({
+    await this.appendLedgerEvent({
       transactionId: txId,
       tenantId: 'default_tenant',
       agentId,
@@ -618,7 +618,7 @@ export class SqliteReserveStore implements IReserveStore {
           ON CONFLICT(id) DO NOTHING
         `).run(txId, purchase.merchant || 'Unknown', purchaseAmount, purchase.category || 'General', purchase.quantity ?? null, reason, timestamp, purchase.mccCode ?? null, hash, prevHash, agentId);
 
-        this.appendLedgerEventSync({
+        await this.appendLedgerEvent({
           transactionId: txId,
           tenantId: purchase.tenantId || 'default_tenant',
           agentId,
@@ -821,7 +821,7 @@ export class SqliteReserveStore implements IReserveStore {
       return result;
     });
 
-    const result = executeAtomic();
+    const result = executeAtomic.immediate();
     
     // Release Redis budget if guard denied — Redis is ephemeral, not source of truth
     if (result.decision !== 'allowed' && !purchase.override) {
@@ -1001,7 +1001,7 @@ export class SqliteReserveStore implements IReserveStore {
       return { success: true };
     });
 
-    return authorizeTx();
+    return authorizeTx.immediate();
   }
 
   async releaseReservation(txIdOrOrderId: string, reason = 'Reservation released/expired', agentId = 'default_agent'): Promise<ReleaseResult> {
@@ -1214,7 +1214,7 @@ export class SqliteReserveStore implements IReserveStore {
       db.prepare("UPDATE transactions SET status = 'expired', paymentStatus = 'expired', reason = 'Reservation TTL expired' WHERE id = ?").run(stale.id);
       db.prepare("UPDATE reserve_state SET heldPaise = MAX(0, heldPaise - ?) WHERE agentId = ?").run(stale.amount, agentId);
 
-      this.appendLedgerEventSync({
+      await this.appendLedgerEvent({
         transactionId: stale.id,
         tenantId: stale.tenantId || 'default_tenant',
         agentId,

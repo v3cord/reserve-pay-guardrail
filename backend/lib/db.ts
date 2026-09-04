@@ -276,7 +276,8 @@ export function initDatabase() {
       tenantId TEXT,
       capturedPaise INTEGER DEFAULT 0,
       refundedPaise INTEGER DEFAULT 0,
-      expiresAt TEXT
+      expiresAt TEXT,
+      reconcileAttempts INTEGER DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS ledger_events (
@@ -357,6 +358,7 @@ export function initDatabase() {
   try { db.exec('ALTER TABLE transactions ADD COLUMN capturedPaise INTEGER DEFAULT 0;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN refundedPaise INTEGER DEFAULT 0;'); } catch {}
   try { db.exec('ALTER TABLE transactions ADD COLUMN expiresAt TEXT;'); } catch {}
+  try { db.exec('ALTER TABLE transactions ADD COLUMN reconcileAttempts INTEGER DEFAULT 0;'); } catch {}
   try { db.exec('ALTER TABLE idempotency_keys ADD COLUMN ownerToken TEXT;'); } catch {}
   try { db.exec('ALTER TABLE idempotency_keys ADD COLUMN leaseExpiresAt TEXT;'); } catch {}
 

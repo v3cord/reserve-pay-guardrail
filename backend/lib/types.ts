@@ -3,6 +3,7 @@ export interface Policy {
   version?: number;
   amountCeiling?: number; // In integer Paise
   category?: string;
+  merchantMode?: 'unrestricted' | 'allowlist';
   allowedMerchants: string[];
   sessionCap?: number; // In integer Paise
   reasonableQuantity?: number;

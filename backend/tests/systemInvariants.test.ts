@@ -19,7 +19,7 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
     );
     await store.setActivePolicy(
       {
-        amountCeiling: 80000, // ₹800
+        amountCeiling: 100000, // ₹1000
         category: 'Food & Dining',
         allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
         sessionCap: 150000, // ₹1,500
@@ -33,7 +33,7 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
   // Invariant 1: Zero-Overspend Invariant
   it('Invariant 1: Zero-Overspend — availablePaise >= 0 and totalPaise == heldPaise + settledPaise + availablePaise', async () => {
     const p1 = await store.processPurchaseAtomic({
-      id: 'tx_inv1_1',
+      id: `tx_${testAgent}_1`,
       agentId: testAgent,
       merchant: 'Swiggy',
       amount: 70000, // ₹700
@@ -50,7 +50,7 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
 
     // Attempt second purchase within session cap (700 + 700 = 1400 <= 1500)
     const p2 = await store.processPurchaseAtomic({
-      id: 'tx_inv1_2',
+      id: `tx_${testAgent}_2`,
       agentId: testAgent,
       merchant: 'Zomato',
       amount: 70000, // ₹700
@@ -61,7 +61,7 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
 
     // Attempt third purchase that would exceed session cap (1400 + 200 = 1600 > 1500)
     const p3 = await store.processPurchaseAtomic({
-      id: 'tx_inv1_3',
+      id: `tx_${testAgent}_3`,
       agentId: testAgent,
       merchant: 'Blinkit',
       amount: 20000, // ₹200

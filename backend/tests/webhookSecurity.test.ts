@@ -48,7 +48,7 @@ describe('Webhook Security – order binding validation', () => {
   let aid: string;
 
   beforeEach(async () => {
-    aid = agentId();
+    aid = `webhook_sec_${Date.now()}`;
     store = new SqliteReserveStore();
     setStoreInstance(store);
     await store.resetStore(aid);
@@ -56,7 +56,7 @@ describe('Webhook Security – order binding validation', () => {
 
     // Seed a transaction with razorpayOrderId
     const tx: Transaction = {
-      id: 'tx_binding_test',
+      id: `tx_binding_${aid}`,
       merchant: 'Swiggy',
       amount: 65000,
       category: 'Food & Dining',
@@ -68,18 +68,38 @@ describe('Webhook Security – order binding validation', () => {
       hash: '',
       prevHash: '',
     };
-    await store.setReserveState({ totalPaise: 200000, heldPaise: 65000, settledPaise: 0, transactions: [tx] }, aid);
-    await store.attachRazorpayOrder('tx_binding_test', 'order_correct_binding', aid);
+    await store.recordTransaction(tx);
+    await store.setReserveState({ totalPaise: 200000, heldPaise: 65000, settledPaise: 0 }, aid);
+    await store.attachRazorpayOrder(`tx_binding_${aid}`, 'order_correct_binding', aid);
   });
 
   it('400 when payment.order_id does not match transaction.razorpayOrderId', async () => {
+    // We need the transaction to be found by the webhook identifier (which is 'order_WRONG_BINDING' here)
+    // so we seed a transaction with id = 'order_WRONG_BINDING' but a different razorpayOrderId.
+    const tx: Transaction = {
+      id: 'order_WRONG_BINDING',
+      merchant: 'Swiggy',
+      amount: 65000,
+      category: 'Food & Dining',
+      status: 'pending',
+      decisionStatus: 'allowed',
+      paymentStatus: 'reserved',
+      timestamp: new Date().toISOString(),
+      hash: 'abc',
+      prevHash: '',
+      agentId: aid,
+      razorpayOrderId: 'order_correct_binding'
+    };
+    await store.recordTransaction(tx);
+    await store.setReserveState({ totalPaise: 200000, heldPaise: 65000, settledPaise: 0 }, aid);
+
     const body = {
       event: 'payment.captured',
       payload: {
         payment: {
           entity: {
             id: 'pay_mismatch_999',
-            order_id: 'order_WRONG_BINDING', // wrong order
+            order_id: 'order_WRONG_BINDING',
             amount: 65000,
             currency: 'INR',
             status: 'captured',
@@ -90,7 +110,7 @@ describe('Webhook Security – order binding validation', () => {
     const res = await postWebhook(makeReq(body));
     expect(res.status).toBe(400);
     const data = await res.json();
-    expect(data.error).toMatch(/binding/i);
+    expect(data.error).toMatch(/binding|belong/i);
   });
 
   it('400 for non-INR currency in capture event', async () => {

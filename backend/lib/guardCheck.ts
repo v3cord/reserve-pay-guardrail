@@ -22,9 +22,13 @@ export function normalizeMerchant(merchant: string): string {
 export function isMerchantAllowed(
   attemptedMerchant: string,
   allowedMerchants: string[],
-  attemptedMerchantId?: string
+  attemptedMerchantId?: string,
+  merchantMode?: 'unrestricted' | 'allowlist'
 ): boolean {
-  if (!allowedMerchants || allowedMerchants.length === 0) return true;
+  if (merchantMode === 'unrestricted') return true;
+  if (!merchantMode && (!allowedMerchants || allowedMerchants.length === 0)) return true;
+  if (merchantMode === 'allowlist' && (!allowedMerchants || allowedMerchants.length === 0)) return false;
+  if (!allowedMerchants || allowedMerchants.length === 0) return false;
 
   const attemptedLower = (attemptedMerchant || '').toLowerCase().trim();
   const attemptedNorm = normalizeMerchant(attemptedMerchant || '');
@@ -268,8 +272,7 @@ export function guardCheck(
 
     // MERCHANT check
     if (!rulesSeen.has('MERCHANT')) {
-      const merchantOk = !policy.allowedMerchants?.length ||
-        isMerchantAllowed(merchant, policy.allowedMerchants, (attemptedPurchase as Record<string, unknown>).merchantId as string | undefined);
+      const merchantOk = isMerchantAllowed(merchant, policy.allowedMerchants, (attemptedPurchase as Record<string, unknown>).merchantId as string | undefined, policy.merchantMode);
       checks.push({
         rule: 'MERCHANT',
         passed: merchantOk,
@@ -389,8 +392,7 @@ export function guardCheck(
   };
 
   // ─── Rule 1: Merchant Whitelist ──────────────────────────────────────────
-  const merchantOk = !policy.allowedMerchants?.length ||
-    isMerchantAllowed(merchant, policy.allowedMerchants, (attemptedPurchase as Record<string, unknown>).merchantId as string | undefined);
+  const merchantOk = isMerchantAllowed(merchant, policy.allowedMerchants, (attemptedPurchase as Record<string, unknown>).merchantId as string | undefined, policy.merchantMode);
 
   checks.push({
     rule: 'MERCHANT',

@@ -15,7 +15,8 @@ CRITICAL DEFENSE ARCHITECTURE & CONSTRAINTS:
    - amountCeiling: number (Single transaction ceiling in integer INR Paise minor units, e.g. ₹500 = 50000). Must NOT exceed 10,000,000 Paise (₹100,000).
    - sessionCap: number (Total session budget in integer INR Paise minor units, e.g. ₹2,000 = 200000). Must NOT exceed 100,000,000 Paise (₹1,000,000).
    - category: string (Expense category).
-   - allowedMerchants: array of clean merchant names (alphanumeric only).
+   - merchantMode: string ("unrestricted" if no merchant restrictions, "allowlist" if merchants are restricted or specified).
+   - allowedMerchants: array of clean merchant names (alphanumeric only). If merchantMode is "unrestricted", this should be empty.
    - reasonableQuantity: number (Quantity per item, max 50).
    - allowedMccCodes: array of 4-digit ISO MCC codes if mentioned.`;
 
@@ -24,10 +25,15 @@ const POLICY_RESPONSE_SCHEMA = {
   properties: {
     amountCeiling: { type: Type.NUMBER, description: 'Maximum amount for a single item/order in integer paise' },
     category: { type: Type.STRING, description: 'Primary expense category' },
+    merchantMode: { 
+      type: Type.STRING, 
+      enum: ['unrestricted', 'allowlist'],
+      description: 'Whether merchant restrictions apply' 
+    },
     allowedMerchants: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: 'List of allowed merchant names',
+      description: 'List of allowed merchant names (empty if unrestricted)',
     },
     sessionCap: { type: Type.NUMBER, description: 'Total session budget or reserve cap in integer paise' },
     reasonableQuantity: { type: Type.NUMBER, description: 'Reasonable quantity limit (max 50)' },
@@ -37,7 +43,7 @@ const POLICY_RESPONSE_SCHEMA = {
       description: 'List of allowed 4-digit MCC codes',
     },
   },
-  required: ['allowedMerchants'],
+  required: ['merchantMode', 'allowedMerchants'],
 };
 
 // Multi-lingual adversarial & prompt injection patterns
@@ -217,9 +223,13 @@ function sanitizePolicy(parsed: Record<string, unknown>): Policy {
     }
   }
 
+  const merchantMode: 'unrestricted' | 'allowlist' = 
+    parsed.merchantMode === 'allowlist' ? 'allowlist' : 'unrestricted';
+
   return {
     amountCeiling,
     category: typeof parsed.category === 'string' ? parsed.category.replace(/[<>{};$()`"\\]/g, '').trim() : undefined,
+    merchantMode,
     allowedMerchants,
     sessionCap,
     reasonableQuantity,
@@ -359,6 +369,7 @@ export function fallbackParseIntent(rawIntent: string): Policy {
   return {
     amountCeiling,
     category,
+    merchantMode: allowedMerchants.length > 0 ? 'allowlist' : 'unrestricted',
     allowedMerchants,
     sessionCap,
     reasonableQuantity,

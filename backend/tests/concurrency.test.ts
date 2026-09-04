@@ -23,7 +23,7 @@ describe('Concurrency – 1000 concurrent requests against bounded reserve', () 
     }, aid);
   });
 
-  it('zero overspend: heldPaise + settledPaise ≤ totalPaise always', async () => {
+  it('zero overspend: heldPaise + settledPaise <= totalPaise always', async () => {
     const N = 1000;
     const amount = 500; // ₹5 each — 200000 / 500 = 400 should succeed
 

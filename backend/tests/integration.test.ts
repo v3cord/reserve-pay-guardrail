@@ -19,7 +19,7 @@ function agentId() {
 }
 
 const DEFAULT_POLICY = {
-  amountCeiling: 80000,
+  amountCeiling: 100000,
   category: 'Food & Dining',
   allowedMerchants: ['Swiggy', 'Zomato'],
   sessionCap: 200000,

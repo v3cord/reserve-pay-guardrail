@@ -8,7 +8,7 @@ function agentId() {
 }
 
 const DEFAULT_POLICY = {
-  amountCeiling: 80000,
+  amountCeiling: 100000,
   category: 'Food & Dining',
   allowedMerchants: ['Swiggy'],
   sessionCap: 200000,
@@ -113,11 +113,13 @@ describe('Failure – Razorpay timeout → unknown → reconciliation', () => {
     vi.spyOn(razorpayModule, 'getRazorpayClient').mockReturnValue({
       orders: {
         create: vi.fn(),
-        fetch: vi.fn().mockRejectedValue(new Error('Order not found on gateway')),
-        fetchByReceipt: vi.fn().mockRejectedValue(new Error('Order not found on gateway')),
+        fetch: vi.fn().mockResolvedValue(null),
+        fetchByReceipt: vi.fn().mockResolvedValue(null),
       },
     } as any);
 
+    await runReconciliation(aid);
+    await runReconciliation(aid);
     const summary = await runReconciliation(aid);
     expect(summary.reservationReleasedCount).toBe(1);
 

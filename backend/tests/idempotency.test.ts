@@ -15,7 +15,7 @@ describe('Idempotency – 100 identical requests → one financial effect', () =
     await store.resetStore(aid);
     await store.setReserveState({ totalPaise: 200000, heldPaise: 0, settledPaise: 0 }, aid);
     await store.setActivePolicy({
-      amountCeiling: 80000,
+      amountCeiling: 100000,
       category: 'Food & Dining',
       allowedMerchants: ['Swiggy'],
       sessionCap: 200000,

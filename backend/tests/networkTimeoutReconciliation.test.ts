@@ -85,6 +85,8 @@ describe('Network Timeout & Background Reconciliation Workflow', () => {
       payments: { capture: vi.fn(), refund: vi.fn() },
     } as any);
 
+    await runReconciliation(testAgent);
+    await runReconciliation(testAgent);
     const summary = await runReconciliation(testAgent);
     expect(summary.scannedCount).toBeGreaterThanOrEqual(1);
     expect(summary.reservationReleasedCount).toBe(1);
