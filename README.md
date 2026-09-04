@@ -157,7 +157,7 @@ bash scripts/ci-gate.sh
 | Test Suite | File | What It Covers |
 |---|---|---|
 | Policy engine rules | `tests/policyEngine.test.ts` | All guardrail rules: merchant, category, MCC, ceiling, session cap, quantity |
-| Store & 2PC state machine | `lib/__tests__/store.test.ts` | Reserve → capture → release transitions, hash chain, concurrency |
+| Store & Atomic Reservation state machine | `lib/__tests__/store.test.ts` | Reserve → capture → release transitions, hash chain, concurrency |
 | Concurrency control | `tests/concurrency.test.ts` | TOCTOU safety under parallel requests |
 | Idempotency | `tests/idempotency.test.ts` | Duplicate request deduplication |
 | Webhook security | `tests/webhookSecurity.test.ts` | HMAC-SHA256 signature verification |

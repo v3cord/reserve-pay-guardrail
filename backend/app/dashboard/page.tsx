@@ -7,6 +7,8 @@ import TelemetryBadge from '../components/TelemetryBadge';
 import AgentFlowDemo from '../components/AgentFlowDemo';
 import AttackDemo from '../components/AttackDemo';
 import LedgerTimeline from '../components/LedgerTimeline';
+import ConcurrencyDemo from '../components/ConcurrencyDemo';
+import IdempotencyDemo from '../components/IdempotencyDemo';
 import McpDemo from '../components/McpDemo';
 import {
   Terminal, Activity, Zap, Play, RotateCw, ArrowRight, CreditCard,
@@ -449,11 +451,33 @@ export default function Home() {
           <McpDemo />
         </section>
 
-        {/* ── Panel 7: Intent & Policy (collapsed into admin tools) ── */}
+        {/* ── Panel 7: Concurrency Attack ── */}
+        <section className="relative bg-[#0b0d0e] border border-[#23272a] p-5 rounded-[2px] shadow-xl">
+          <CornerBrackets color="#353535" size={14} />
+          <div className="text-[10px] font-pixel text-[#5a5e62] tracking-widest uppercase mb-4 flex items-center justify-between border-b border-[#1b1e20] pb-2">
+            <span className="flex items-center gap-2 text-[#ff571a]">
+              <Zap className="w-3.5 h-3.5" />{"// 07 CONCURRENCY ATTACK"}
+            </span>
+          </div>
+          <ConcurrencyDemo />
+        </section>
+
+        {/* ── Panel 8: Idempotency Replay ── */}
+        <section className="relative bg-[#0b0d0e] border border-[#23272a] p-5 rounded-[2px] shadow-xl">
+          <CornerBrackets color="#353535" size={14} />
+          <div className="text-[10px] font-pixel text-[#5a5e62] tracking-widest uppercase mb-4 flex items-center justify-between border-b border-[#1b1e20] pb-2">
+            <span className="flex items-center gap-2 text-[#38bdf8]">
+              <RotateCw className="w-3.5 h-3.5" />{"// 08 IDEMPOTENCY REPLAY"}
+            </span>
+          </div>
+          <IdempotencyDemo />
+        </section>
+
+        {/* ── Panel 9: Intent & Policy (collapsed into admin tools) ── */}
         <section className="relative bg-[#0b0d0e] border border-[#23272a] rounded-[2px] shadow-xl overflow-hidden">
           <CornerBrackets color="#353535" size={12} />
           <button onClick={() => setShowAdminTools((p) => !p)} className="w-full px-5 py-3 flex items-center justify-between text-[10px] font-pixel text-[#5a5e62] uppercase tracking-widest hover:text-[#ff571a] transition">
-            <span className="flex items-center gap-2"><Zap className="w-3.5 h-3.5" />// 07 MANUAL SIMULATOR & POLICY TOOLS</span>
+            <span className="flex items-center gap-2"><Zap className="w-3.5 h-3.5" />// 09 MANUAL SIMULATOR & POLICY TOOLS</span>
             <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAdminTools ? 'rotate-180' : ''}`} />
           </button>
 

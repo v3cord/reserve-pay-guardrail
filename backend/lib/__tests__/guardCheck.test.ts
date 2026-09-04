@@ -114,7 +114,7 @@ describe('guardCheck - Core Rule & Fail-Safe Tests', () => {
     expect(res2.reason.toLowerCase()).toContain('combined orders exceeding session budget');
   });
 
-  it('Rule 5: approves matching purchase and creates 2PC reservation', async () => {
+  it('Rule 5: approves matching purchase and creates Atomic Reservation reservation', async () => {
     const purchase: AttemptedPurchase = {
       merchant: 'Amazon',
       amount: 40000, // ₹400.00

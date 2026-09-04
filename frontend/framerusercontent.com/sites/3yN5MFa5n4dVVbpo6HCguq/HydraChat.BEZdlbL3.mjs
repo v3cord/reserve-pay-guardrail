@@ -46,7 +46,7 @@ Er = __makeSafe(R(m(function(e, n) {
           alignItems: "center"
         },
         children: [
-          _("span", { children: "Reserve Pay Guardrail · Sub-10ms 2PC Locking" }),
+          _("span", { children: "Reserve Pay Guardrail · Sub-10ms Atomic Reservation Locking" }),
           _("span", { children: "© 2026 Reserve Pay Guardrail. All rights reserved." })
         ]
       })

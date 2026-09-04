@@ -36,7 +36,7 @@ vi.mock('../razorpayClient', () => ({
   }),
 }));
 
-describe('Persistent SQLite Store & Two-Phase Commit State Machine', () => {
+describe('Persistent SQLite Store & Atomic Reservation State Machine', () => {
   beforeEach(async () => {
     await resetStore();
   });
@@ -84,7 +84,7 @@ describe('Persistent SQLite Store & Two-Phase Commit State Machine', () => {
       expect(state.transactions).toEqual([]);
     });
 
-    it('setReserveState updates 2PC reserve amounts and syncs transactions', async () => {
+    it('setReserveState updates Atomic Reservation reserve amounts and syncs transactions', async () => {
       const tx: Transaction = {
         id: 'tx_manual_1',
         merchant: 'Amazon',
@@ -162,11 +162,11 @@ describe('Persistent SQLite Store & Two-Phase Commit State Machine', () => {
     });
   });
 
-  describe('Two-Phase Commit State Machine Transitions (settle & release)', () => {
+  describe('Atomic Reservation State Machine Transitions (settle & release)', () => {
     it('transitions reserved transaction to captured via await settleTransaction()', async () => {
       // 1. Process purchase -> transaction reserved, heldPaise incremented
       const purchaseResult = await processPurchaseAtomic({
-        id: 'tx_2pc_capture',
+        id: 'tx_Atomic Reservation_capture',
         merchant: 'Amazon',
         amount: 35000, // ₹350.00
         category: 'Electronics',
@@ -180,7 +180,7 @@ describe('Persistent SQLite Store & Two-Phase Commit State Machine', () => {
       expect(stateAfterReserve.transactions[0].status).toBe('reserved');
 
       // 2. Settle transaction -> shifts heldPaise to settledPaise, marks captured
-      const settleResult = await settleTransaction('tx_2pc_capture', 'pay_mock_capture_123');
+      const settleResult = await settleTransaction('tx_Atomic Reservation_capture', 'pay_mock_capture_123');
       expect(settleResult.success).toBe(true);
       expect(settleResult.transaction?.status).toBe('captured');
       expect(settleResult.transaction?.razorpayPaymentId).toBe('pay_mock_capture_123');
@@ -197,7 +197,7 @@ describe('Persistent SQLite Store & Two-Phase Commit State Machine', () => {
     it('transitions reserved transaction to expired via await releaseReservation() and restores funds', async () => {
       // 1. Process purchase -> transaction reserved, heldPaise incremented
       const purchaseResult = await processPurchaseAtomic({
-        id: 'tx_2pc_release',
+        id: 'tx_Atomic Reservation_release',
         merchant: 'Amazon',
         amount: 40000, // ₹400.00
         category: 'Electronics',
@@ -208,7 +208,7 @@ describe('Persistent SQLite Store & Two-Phase Commit State Machine', () => {
       expect((await getReserveState()).availablePaise).toBe(160000);
 
       // 2. User abandons checkout / cancels modal -> release reservation
-      const releaseResult = await releaseReservation('tx_2pc_release', 'Checkout modal cancelled by user');
+      const releaseResult = await releaseReservation('tx_Atomic Reservation_release', 'Checkout modal cancelled by user');
       expect(releaseResult.success).toBe(true);
       expect(releaseResult.transaction?.status).toBe('expired');
 

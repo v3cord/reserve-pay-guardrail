@@ -183,7 +183,7 @@ describe('Buildathon Champion Remediation Suite', () => {
       expect(data.verified).toBe(false);
     });
 
-    it('returns 200 and captures/settles 2PC transaction on valid Razorpay payment signature', async () => {
+    it('returns 200 and captures/settles Atomic Reservation transaction on valid Razorpay payment signature', async () => {
       const orderId = 'order_verif_999';
       const paymentId = 'pay_verif_888';
 
@@ -232,7 +232,7 @@ describe('Buildathon Champion Remediation Suite', () => {
       expect(data.verified).toBe(true);
       expect(data.status).toBe('success');
 
-      // Verify 2PC settlement in store
+      // Verify Atomic Reservation settlement in store
       const state = await getReserveState();
       const updatedTx = state.transactions.find((t) => t.id === 'tx_verif_1');
       expect(updatedTx?.status).toBe('captured');

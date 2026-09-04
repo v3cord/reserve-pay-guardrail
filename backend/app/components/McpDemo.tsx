@@ -7,8 +7,8 @@ import CornerBrackets from './CornerBrackets';
 interface McpLog {
   id: string;
   tool: string;
-  payload: any;
-  result?: any;
+  payload: Record<string, unknown>;
+  result?: Record<string, unknown> | null;
   status: 'running' | 'done' | 'error';
 }
 
@@ -26,7 +26,6 @@ export default function McpDemo() {
     setLogs((prev) => [...prev, { id, tool: 'reserve_check_budget', payload, status: 'running' }]);
     
     try {
-      // Simulate MCP call using Next.js APIs
       const [policyRes, reserveRes] = await Promise.all([
         fetch('/api/policy').then(r => r.json()),
         fetch('/api/reserve').then(r => r.json()),
@@ -41,8 +40,9 @@ export default function McpDemo() {
       
       setLogs((prev) => prev.map(l => l.id === id ? { ...l, status: 'done', result } : l));
       setExpandedLog(id);
-    } catch (e: any) {
-      setLogs((prev) => prev.map(l => l.id === id ? { ...l, status: 'error', result: { error: e.message } } : l));
+    } catch (e: unknown) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      setLogs((prev) => prev.map(l => l.id === id ? { ...l, status: 'error', result: { error: errorMsg } } : l));
     }
   };
 
@@ -81,16 +81,17 @@ export default function McpDemo() {
       
       setLogs((prev) => prev.map(l => l.id === id ? { ...l, status: 'done', result } : l));
       setExpandedLog(id);
-    } catch (e: any) {
-      setLogs((prev) => prev.map(l => l.id === id ? { ...l, status: 'error', result: { error: e.message } } : l));
+    } catch (e: unknown) {
+      const errorMsg = e instanceof Error ? e.message : String(e);
+      setLogs((prev) => prev.map(l => l.id === id ? { ...l, status: 'error', result: { error: errorMsg } } : l));
     }
   };
 
   return (
     <div className="flex flex-col gap-4 w-full">
-      <div className="flex items-center gap-3 justify-between flex-wrap">
+      <div className="flex flex-col items-start gap-3 justify-between flex-wrap">
         <p className="text-[11px] font-mono text-[#8e9296]">
-          Simulate an AI Agent calling Model Context Protocol (MCP) tools.
+          This demo simulates an MCP tool invocation using the same backend financial authorization path. The production MCP server exposes the same financial capabilities to agents.
         </p>
         <div className="flex items-center gap-2">
           <button onClick={runMcpCheckBudget} className="bg-[#111416] hover:bg-[#23272a] border border-[#23272a] hover:border-[#ff571a]/50 text-[#8e9296] hover:text-white font-pixel text-[9px] font-bold px-3 py-2 rounded-[2px] transition flex items-center gap-1.5 uppercase">

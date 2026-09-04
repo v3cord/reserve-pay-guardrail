@@ -17,7 +17,7 @@ import { getRazorpayClient } from '../lib/razorpayClient';
 export const RESERVE_CHECK_BUDGET_TOOL: Tool = {
   name: 'reserve_check_budget',
   description:
-    'Check active guardrail policy, current 2PC reserve balance, and remaining available spending budget for the agent.',
+    'Check active guardrail policy, current reserve balance, and remaining available spending budget for the agent.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -32,7 +32,7 @@ export const RESERVE_CHECK_BUDGET_TOOL: Tool = {
 export const RESERVE_REQUEST_PURCHASE_TOOL: Tool = {
   name: 'reserve_request_purchase',
   description:
-    'Evaluate an attempted purchase against spending guardrails and create a Two-Phase Commit (2PC) reservation with Razorpay order creation.',
+    'Evaluate an attempted purchase against spending guardrails and create an atomic local reservation with Razorpay order creation.',
   inputSchema: {
     type: 'object',
     properties: {
@@ -225,7 +225,7 @@ export async function handleExplainPolicy(agentId = 'default_agent', query?: str
     `• Cumulative Session Cap: ${sessionCapRupees}\n` +
     `• Max Normal Item Quantity: ${maxQty} (micro-purchases $\\le 5\\%$ of ceiling are exempt)\n` +
     `• Current Remaining Budget: ₹${availableRupees}\n\n` +
-    `Guideline: Purchases matching the allowed merchants and category within budget limits will be approved with an atomic 2PC Razorpay Order ID. Violations will be safely frozen.`;
+    `Guideline: Purchases matching the allowed merchants and category within budget limits will be approved with an atomic Atomic Reservation Razorpay Order ID. Violations will be safely frozen.`;
 
   if (query) {
     explanation += `\n\nContext Query: "${query}"\nPlease adhere to the constraints above before executing transactions.`;

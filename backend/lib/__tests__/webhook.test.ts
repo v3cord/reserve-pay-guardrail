@@ -46,7 +46,7 @@ describe('Razorpay Webhook Handler (/api/webhook) & Gateway Reconciliation', () 
   });
 
   describe('Bidirectional Webhook Events Reconciliation', () => {
-    it('returns 200 and settles 2PC transaction on payment.captured / order.paid', async () => {
+    it('returns 200 and settles Atomic Reservation transaction on payment.captured / order.paid', async () => {
       const orderId = 'order_test_webhook_123';
 
       // Seed reserved transaction with held funds in store
@@ -106,7 +106,7 @@ describe('Razorpay Webhook Handler (/api/webhook) & Gateway Reconciliation', () 
       expect(data.received).toBe(true);
       expect(data.event).toBe('payment.captured');
 
-      // Verify 2PC settlement in store
+      // Verify Atomic Reservation settlement in store
       const state = await getReserveState();
       const updatedTx = state.transactions.find((t) => t.id === 'tx_wh_1');
       expect(updatedTx).toBeDefined();
@@ -116,7 +116,7 @@ describe('Razorpay Webhook Handler (/api/webhook) & Gateway Reconciliation', () 
       expect((await verifyLedgerIntegrity()).isValid).toBe(true);
     });
 
-    it('releases 2PC reservation on payment.failed webhook event', async () => {
+    it('releases Atomic Reservation reservation on payment.failed webhook event', async () => {
       const orderId = 'order_test_webhook_fail';
 
       const initialTx: Transaction = {

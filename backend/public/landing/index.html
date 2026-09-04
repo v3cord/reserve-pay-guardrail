@@ -440,7 +440,7 @@
       badge.style.display = 'flex';
       badge.style.alignItems = 'center';
       badge.style.gap = '8px';
-      badge.innerHTML = '<span style="width:7px;height:7px;border-radius:50%;background:#ff571a;display:inline-block;box-shadow:0 0 8px #ff571a;animation:pulse 1.5s infinite"></span><span id="latency-val">4.2ms</span> 2PC SYNC ACTIVE';
+      badge.innerHTML = '<span style="width:7px;height:7px;border-radius:50%;background:#ff571a;display:inline-block;box-shadow:0 0 8px #ff571a;animation:pulse 1.5s infinite"></span><span id="latency-val">4.2ms</span> Atomic Reservation SYNC ACTIVE';
       container.appendChild(badge);
 
       setInterval(() => {
@@ -681,13 +681,13 @@
       return;
     }
 
-    // Find the element containing "Parse natural language intent into deterministic 2PC spending policies."
+    // Find the element containing "Parse natural language intent into deterministic Atomic Reservation spending policies."
     const candidates = document.querySelectorAll('.framer-1xa27fo, .framer-aojr4a, [data-framer-name="Frame 71"], p');
     let targetContainer = null;
     let targetParagraph = null;
 
     for (let el of candidates) {
-      if (el.textContent && el.textContent.includes('Parse natural language intent into deterministic 2PC spending policies.')) {
+      if (el.textContent && el.textContent.includes('Parse natural language intent into deterministic Atomic Reservation spending policies.')) {
         if (el.classList.contains('framer-1xa27fo')) {
           targetContainer = el.parentElement || el;
           targetParagraph = el;
@@ -854,7 +854,7 @@
       if (el) el.style.display = 'none';
     });
     document.querySelectorAll('p').forEach(p => {
-      if (p.textContent && p.textContent.includes('Reserve Pay Guardrail 2PC Console is live')) {
+      if (p.textContent && p.textContent.includes('Reserve Pay Guardrail Atomic Reservation Console is live')) {
         p.textContent = '';
         if (p.parentElement) p.parentElement.style.display = 'none';
       }
