@@ -246,7 +246,7 @@ async function runBenchmark() {
     const failures: string[] = [];
 
     try {
-      policy = (await parseIntent(tc.input)) as Record<string, unknown>;
+      policy = (await parseIntent(tc.input)) as unknown as Record<string, unknown>;
     } catch (err) {
       failures.push(`parseIntent threw: ${err}`);
     }
