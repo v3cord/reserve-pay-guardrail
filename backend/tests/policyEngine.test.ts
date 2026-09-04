@@ -5,7 +5,7 @@ import { Policy, ReserveState, AttemptedPurchase } from '../lib/types';
 const BASE_POLICY: Policy = {
   amountCeiling: 80000,      // ₹800
   category: 'Food & Dining',
-  allowedMerchants: ['Swiggy', 'Zomato'],
+  merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Zomato'],
   sessionCap: 200000,        // ₹2000
   reasonableQuantity: 2,
 };
@@ -35,7 +35,7 @@ describe('guardCheck – amount ceiling', () => {
   });
 
   it('denies when amountCeiling is undefined (fail-safe)', () => {
-    const unboundedPolicy: Policy = { allowedMerchants: [], sessionCap: 200000 };
+    const unboundedPolicy: Policy = { merchantMode: 'unrestricted', allowedMerchants: [], sessionCap: 200000 };
     const r = guardCheck(unboundedPolicy, EMPTY_STATE, { merchant: 'Swiggy', amount: 1000, category: 'Food & Dining' });
     expect(r.decision).toBe('denied');
     expect(r.ruleViolated).toBe('UNBOUNDED_CEILING_FAILSAFE');
@@ -76,19 +76,19 @@ describe('guardCheck – merchant allowlist', () => {
   });
 
   it('denies reverse sub-brand (Swiggy Instamart allowed but Swiggy attempted)', () => {
-    const strictPolicy: Policy = { ...BASE_POLICY, allowedMerchants: ['Swiggy Instamart'] };
+    const strictPolicy: Policy = { ...BASE_POLICY, merchantMode: 'allowlist', allowedMerchants: ['Swiggy Instamart'] };
     const r = guardCheck(strictPolicy, EMPTY_STATE, { merchant: 'Swiggy', amount: 10000, category: 'Food & Dining' });
     expect(r.decision).toBe('denied');
   });
 
   it('strips corporate suffixes: "Amazon India Private Limited" matches "Amazon"', () => {
-    const amzPolicy: Policy = { ...BASE_POLICY, allowedMerchants: ['Amazon'], category: 'Electronics' };
+    const amzPolicy: Policy = { ...BASE_POLICY, merchantMode: 'allowlist', allowedMerchants: ['Amazon'], category: 'Electronics' };
     const r = guardCheck(amzPolicy, EMPTY_STATE, { merchant: 'Amazon India Private Limited', amount: 10000, category: 'Electronics' });
     expect(r.decision).not.toBe('denied');
   });
 
   it('allows any merchant when allowedMerchants is empty', () => {
-    const openPolicy: Policy = { amountCeiling: 80000, allowedMerchants: [], sessionCap: 200000 };
+    const openPolicy: Policy = { amountCeiling: 80000, merchantMode: 'unrestricted', allowedMerchants: [], sessionCap: 200000 };
     const r = guardCheck(openPolicy, EMPTY_STATE, { merchant: 'RandomMerchant', amount: 10000 });
     expect(r.decision).toBe('allowed');
   });
@@ -114,13 +114,13 @@ describe('guardCheck – category matching', () => {
   });
 
   it('allows by allowedMccCodes even if category name mismatches', () => {
-    const mccPolicy: Policy = { amountCeiling: 80000, allowedMerchants: ['Swiggy'], allowedMccCodes: ['5812', '5814'], sessionCap: 200000 };
+    const mccPolicy: Policy = { amountCeiling: 80000, merchantMode: 'allowlist', allowedMerchants: ['Swiggy'], allowedMccCodes: ['5812', '5814'], sessionCap: 200000 };
     const r = guardCheck(mccPolicy, EMPTY_STATE, { merchant: 'Swiggy', amount: 10000, category: 'Fast Food', mccCode: '5814' });
     expect(r.decision).not.toBe('denied');
   });
 
   it('skips category check entirely when policy has no category and no MCC codes', () => {
-    const noCategory: Policy = { amountCeiling: 80000, allowedMerchants: [], sessionCap: 200000 };
+    const noCategory: Policy = { amountCeiling: 80000, merchantMode: 'unrestricted', allowedMerchants: [], sessionCap: 200000 };
     const r = guardCheck(noCategory, EMPTY_STATE, { merchant: 'AnyMerchant', amount: 10000, category: 'Gambling' });
     expect(r.decision).toBe('allowed');
   });

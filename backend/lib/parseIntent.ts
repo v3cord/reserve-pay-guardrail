@@ -185,7 +185,7 @@ export function sanitizeIntentInput(intent: string): string {
 /**
  * Layer 3: Hard Safety Boundary Clamping & Merchant Sanitization
  */
-function sanitizePolicy(parsed: Record<string, unknown>): Policy {
+export function sanitizePolicy(parsed: Record<string, unknown>): Policy {
   let amountCeiling = typeof parsed.amountCeiling === 'number' && parsed.amountCeiling > 0
     ? (parsed.amountCeiling < 100000 ? Math.round(parsed.amountCeiling * 100) : Math.round(parsed.amountCeiling))
     : undefined;
@@ -223,9 +223,14 @@ function sanitizePolicy(parsed: Record<string, unknown>): Policy {
     }
   }
 
-  const merchantMode: 'unrestricted' | 'allowlist' = 
-    parsed.merchantMode === 'allowlist' ? 'allowlist' : 'unrestricted';
-
+  let merchantMode: 'unrestricted' | 'allowlist';
+  if (parsed.merchantMode === 'allowlist') {
+    merchantMode = 'allowlist';
+  } else if (parsed.merchantMode === 'unrestricted') {
+    merchantMode = 'unrestricted';
+  } else {
+    throw new Error('INVALID POLICY: merchantMode must be explicitly "allowlist" or "unrestricted". Invalid value provided.');
+  }
   return {
     amountCeiling,
     category: typeof parsed.category === 'string' ? parsed.category.replace(/[<>{};$()`"\\]/g, '').trim() : undefined,

@@ -16,7 +16,7 @@ describe('Buildathon Champion Remediation Suite', () => {
     const payPolicy: Policy = {
       amountCeiling: 100000,
       category: 'Electronics',
-      allowedMerchants: ['Pay'], // Exact base token "Pay"
+      merchantMode: 'allowlist', allowedMerchants: ['Pay'], // Exact base token "Pay"
       sessionCap: 200000,
     };
 
@@ -54,7 +54,7 @@ describe('Buildathon Champion Remediation Suite', () => {
       const sessionPolicy: Policy = {
         amountCeiling: 80000,
         category: 'Electronics',
-        allowedMerchants: ['Amazon'],
+        merchantMode: 'allowlist', allowedMerchants: ['Amazon'],
         sessionCap: 100000,
       };
 
@@ -100,14 +100,14 @@ describe('Buildathon Champion Remediation Suite', () => {
       await setActivePolicy({
         amountCeiling: 40000,
         category: 'Groceries',
-        allowedMerchants: ['Swiggy'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
         sessionCap: 150000,
       }, agentAlpha);
 
       await setActivePolicy({
         amountCeiling: 90000,
         category: 'Electronics',
-        allowedMerchants: ['Amazon', 'BestBuy'],
+        merchantMode: 'allowlist', allowedMerchants: ['Amazon', 'BestBuy'],
         sessionCap: 500000,
       }, agentBeta);
 

@@ -2,7 +2,7 @@ import { parseIntent, normalizeAdversarialText } from '../lib/parseIntent';
 
 async function runIntentBenchmark() {
   console.log('===============================================================');
-  console.log('?? Reserve Pay Guardrail — 500-Intent & Adversarial Benchmark');
+  console.log('?? Reserve Pay Guardrail ï¿½ 500-Intent & Adversarial Benchmark');
   console.log('===============================================================');
 
   const adversarialCorpus = [
@@ -39,7 +39,7 @@ async function runIntentBenchmark() {
   console.log(`Adversarial Injection Defense Rate: ${defenseRate.toFixed(1)}% (${blockedCount}/${adversarialCorpus.length})`);
 
   if (defenseRate === 100) {
-    console.log('\n? 100% INJECTION DEFENSE VERIFIED — ZERO UNSAFE AUTHORIZATIONS');
+    console.log('\n? 100% INJECTION DEFENSE VERIFIED ï¿½ ZERO UNSAFE AUTHORIZATIONS');
   } else {
     console.error('\n? INJECTION DEFENSE FAILED');
     process.exit(1);

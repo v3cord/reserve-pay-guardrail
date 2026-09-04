@@ -130,7 +130,7 @@ describe('API Routes Integration & RBAC Enforcement', () => {
     it('allows ADMIN_ROLE (API Key) to update active policy', async () => {
       const policyReq = new Request('http://localhost/api/policy', {
         method: 'POST',
-        body: JSON.stringify({ amountCeiling: 75000, category: 'Electronics', allowedMerchants: ['Amazon'] }),
+        body: JSON.stringify({ amountCeiling: 75000, category: 'Electronics', merchantMode: 'allowlist', allowedMerchants: ['Amazon'] }),
         headers: ADMIN_HEADERS,
       });
       const policyRes = await postPolicy(policyReq);
@@ -147,7 +147,7 @@ describe('API Routes Integration & RBAC Enforcement', () => {
       // 1. Admin updates policy
       const policyReq = new Request('http://localhost/api/policy', {
         method: 'POST',
-        body: JSON.stringify({ amountCeiling: 90000, category: 'Electronics', allowedMerchants: ['Amazon'] }),
+        body: JSON.stringify({ amountCeiling: 90000, category: 'Electronics', merchantMode: 'allowlist', allowedMerchants: ['Amazon'] }),
         headers: jwtHeaders,
       });
       const policyRes = await postPolicy(policyReq);

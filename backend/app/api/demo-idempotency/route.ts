@@ -43,8 +43,6 @@ export async function POST(request: Request) {
       headers: {
         'Content-Type': 'application/json',
         'x-idempotency-key': idempotencyKey,
-        'Authorization': `Bearer ${process.env.TEST_API_KEY || 'demo_mode_bypass'}`, 
-        // Or if auth requires something else, we use the cookie from the current request
         'cookie': request.headers.get('cookie') || '',
       },
       body: JSON.stringify(purchaseParams)

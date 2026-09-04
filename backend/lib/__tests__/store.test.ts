@@ -57,7 +57,7 @@ describe('Persistent SQLite Store & Atomic Reservation State Machine', () => {
       const updatedPolicy: Policy = {
         amountCeiling: 80000, // ₹800.00
         category: 'Gadgets',
-        allowedMerchants: ['AppleStore'],
+        merchantMode: 'allowlist', allowedMerchants: ['AppleStore'],
         sessionCap: 150000, // ₹1500.00
         reasonableQuantity: 3,
       };
@@ -137,7 +137,7 @@ describe('Persistent SQLite Store & Atomic Reservation State Machine', () => {
       await setActivePolicy({
         amountCeiling: 10000,
         category: 'Toys',
-        allowedMerchants: ['LegoStore'],
+        merchantMode: 'allowlist', allowedMerchants: ['LegoStore'],
       });
 
       await setReserveState({

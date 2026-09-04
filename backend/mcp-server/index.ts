@@ -164,7 +164,7 @@ export async function handleRequestPurchase(args: {
     let razorpayOrderId: string | undefined;
     try {
       const razorpay = getRazorpayClient();
-      const rzpOrder: any = await (razorpay.orders as any).create({
+      const rzpOrder = await (razorpay.orders as unknown as { create: (opts: Record<string, unknown>) => Promise<{id: string}> }).create({
         amount: amountPaise,
         currency: 'INR',
         receipt: `rcpt_mcp_${purchasePayload.id}`.slice(0, 40),

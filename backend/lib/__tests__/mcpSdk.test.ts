@@ -36,7 +36,7 @@ describe('Model Context Protocol (MCP) Server & Agent SDK', () => {
     await setActivePolicy({
       amountCeiling: 50000, // ₹500.00
       category: 'Electronics',
-      allowedMerchants: ['Amazon', 'BestBuy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Amazon', 'BestBuy'],
       sessionCap: 100000, // ₹1000.00
       reasonableQuantity: 2,
     });

@@ -33,7 +33,7 @@ describe('Security Regression Tests — 11 Required Proofs', () => {
       {
         amountCeiling: 100000,
         category: 'Food & Dining',
-        allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
         sessionCap: 500000,
         reasonableQuantity: 5,
         allowedMccCodes: ['5812', '5814'],
@@ -56,7 +56,7 @@ describe('Security Regression Tests — 11 Required Proofs', () => {
     await store.setActivePolicy(
       {
         amountCeiling: 100000,
-        allowedMerchants: ['Swiggy'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
         sessionCap: 500000,
       },
       victimAgent

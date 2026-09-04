@@ -34,10 +34,20 @@ export async function POST(request: Request) {
     sessionCap: budgetPaise,
   }, testAgentId);
 
-  const N = 1000;
+  let N = 1000;
+  try {
+    const rawBody = await request.text();
+    if (rawBody) {
+      const body = JSON.parse(rawBody);
+      if (typeof body.count === 'number' && body.count > 0) {
+        N = Math.min(Math.floor(body.count), 1000);
+      }
+    }
+  } catch (err) {}
+  
   const unitAmount = 80000; // ₹800
 
-  // 1000 requests concurrently
+  // N requests concurrently
   const promises = Array.from({ length: N }, (_, i) =>
     store.processPurchaseAtomic({
       id: `attack_conc_${i}_${Date.now()}`,

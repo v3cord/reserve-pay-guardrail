@@ -91,7 +91,7 @@ describe('Distributed Concurrency & Redis Token-Bucket Double-Spending Preventio
         {
           amountCeiling: 10000,
           category: 'Electronics',
-          allowedMerchants: ['Amazon', 'BestBuy', 'AppleStore'],
+          merchantMode: 'allowlist', allowedMerchants: ['Amazon', 'BestBuy', 'AppleStore'],
           sessionCap: 150000,
           tenantId: 'tenant_enterprise_1',
         },
@@ -155,7 +155,7 @@ describe('Distributed Concurrency & Redis Token-Bucket Double-Spending Preventio
         {
           amountCeiling: 10000,
           category: 'Electronics',
-          allowedMerchants: ['Amazon'],
+          merchantMode: 'allowlist', allowedMerchants: ['Amazon'],
           sessionCap: 100000, // ₹1,000.00
         },
         agentId

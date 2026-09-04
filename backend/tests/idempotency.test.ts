@@ -17,7 +17,7 @@ describe('Idempotency – 100 identical requests → one financial effect', () =
     await store.setActivePolicy({
       amountCeiling: 100000,
       category: 'Food & Dining',
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       sessionCap: 200000,
     }, aid);
   });

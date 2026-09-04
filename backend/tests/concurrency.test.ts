@@ -17,7 +17,7 @@ describe('Concurrency – 1000 concurrent requests against bounded reserve', () 
     await store.setActivePolicy({
       amountCeiling: 30000,
       category: 'Food & Dining',
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       sessionCap: 200000,
       reasonableQuantity: 10,
     }, aid);
@@ -62,7 +62,7 @@ describe('Concurrency – 1000 concurrent requests against bounded reserve', () 
     await store.setActivePolicy({
       amountCeiling: 60000,
       category: 'Food & Dining',
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       sessionCap: 200000,
     }, aid);
 
@@ -100,7 +100,7 @@ describe('Concurrency – ledger chain integrity after concurrent appends', () =
     await store.setActivePolicy({
       amountCeiling: 10000,
       category: 'Food & Dining',
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       sessionCap: 1000000,
     }, aid);
   });

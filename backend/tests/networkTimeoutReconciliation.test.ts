@@ -19,7 +19,7 @@ describe('Network Timeout & Background Reconciliation Workflow', () => {
       {
         amountCeiling: 100000,
         category: 'Food & Dining',
-        allowedMerchants: ['Swiggy'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
         sessionCap: 200000,
       },
       testAgent

@@ -298,6 +298,7 @@ export class PostgresReserveStore implements IReserveStore {
       return {
         amountCeiling: 50000,
         category: 'Electronics',
+        merchantMode: 'allowlist',
         allowedMerchants: ['Amazon', 'BestBuy'],
         sessionCap: 100000,
         version: 1,
@@ -317,6 +318,7 @@ export class PostgresReserveStore implements IReserveStore {
       version: row.version ? parseInt(row.version, 10) : 1,
       amountCeiling: row.amount_ceiling ? parseInt(row.amount_ceiling, 10) : undefined,
       category: row.category || undefined,
+      merchantMode: row.merchantMode || (allowedMerchants.length > 0 ? 'allowlist' : 'unrestricted'),
       allowedMerchants,
       sessionCap: row.session_cap ? parseInt(row.session_cap, 10) : undefined,
       reasonableQuantity: row.reasonable_quantity ? parseFloat(row.reasonable_quantity) : undefined,

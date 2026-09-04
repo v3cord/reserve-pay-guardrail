@@ -444,7 +444,7 @@ export default function Home() {
           <CornerBrackets color="#353535" size={14} />
           <div className="text-[10px] font-pixel text-[#5a5e62] tracking-widest uppercase mb-4 flex items-center justify-between border-b border-[#1b1e20] pb-2">
             <span className="flex items-center gap-2 text-[#38bdf8]">
-              <Wrench className="w-3.5 h-3.5" />{"// 06 MCP TOOL INTERFACE"}
+              <Wrench className="w-3.5 h-3.5" />{"// 06 MCP TOOL SIMULATION"}
             </span>
             <span className="text-[#5a5e62] font-mono hidden sm:inline">MODEL CONTEXT PROTOCOL</span>
           </div>

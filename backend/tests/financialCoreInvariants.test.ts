@@ -18,7 +18,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
       {
         amountCeiling: 200000,
         category: 'Food & Dining',
-        allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
         sessionCap: 200000,
         reasonableQuantity: 3,
         allowedMccCodes: ['5812', '5814'],
@@ -237,7 +237,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
       {
         amountCeiling: 100000,
         category: 'Food & Dining',
-        allowedMerchants: ['Swiggy'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
         sessionCap: 100000, // session cap
         reasonableQuantity: 3,
         allowedMccCodes: ['5812'],
@@ -302,7 +302,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
       {
         amountCeiling: 15000,
         category: 'Food & Dining',
-        allowedMerchants: ['Swiggy'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
         sessionCap: 100000,
         reasonableQuantity: 3,
         allowedMccCodes: ['5812'],

@@ -41,7 +41,7 @@ export default function ConcurrencyDemo() {
     <div className="flex flex-col gap-4">
       <div className="flex items-center justify-between">
         <p className="text-[11px] font-mono text-[#8e9296]">
-          Fires 1,000 concurrent purchase requests against a strict budget to prove zero overspend.
+          1,000 concurrent reservation attempts are executed against the atomic reservation boundary to prove zero overspend.
         </p>
         <button
           onClick={runAttack}

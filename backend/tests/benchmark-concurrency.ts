@@ -3,7 +3,7 @@ import { InMemoryTokenBucket } from '../lib/tokenBucket';
 
 async function runConcurrencyBenchmark() {
   console.log('===============================================================');
-  console.log('? Reserve Pay Guardrail — 1,000-Request Concurrency Benchmark');
+  console.log('? Reserve Pay Guardrail ï¿½ 1,000-Request Concurrency Benchmark');
   console.log('===============================================================');
 
   const totalCapPaise = 100000; // ?1,000 reserve pool
@@ -19,7 +19,7 @@ async function runConcurrencyBenchmark() {
     {
       amountCeiling: 50000,
       category: 'Food & Dining',
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       sessionCap: totalCapPaise,
     },
     agentId

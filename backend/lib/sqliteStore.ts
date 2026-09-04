@@ -367,6 +367,7 @@ export class SqliteReserveStore implements IReserveStore {
       return {
         amountCeiling: 50000,
         category: 'Electronics',
+        merchantMode: 'allowlist',
         allowedMerchants: ['Amazon', 'BestBuy'],
         sessionCap: 100000,
         version: 1,
@@ -378,6 +379,7 @@ export class SqliteReserveStore implements IReserveStore {
       version: row.version ?? 1,
       amountCeiling: row.amountCeiling !== null ? row.amountCeiling : undefined,
       category: row.category !== null ? row.category : undefined,
+      merchantMode: row.merchantMode || (JSON.parse(row.allowedMerchants).length > 0 ? 'allowlist' : 'unrestricted'),
       allowedMerchants: JSON.parse(row.allowedMerchants),
       sessionCap: row.sessionCap !== null ? row.sessionCap : undefined,
       reasonableQuantity: row.reasonableQuantity !== null ? row.reasonableQuantity : undefined,
@@ -833,12 +835,13 @@ export class SqliteReserveStore implements IReserveStore {
 
   private getActivePolicySync(agentId: string): Policy {
     const row = db.prepare("SELECT * FROM policies WHERE agentId = ? LIMIT 1").get(agentId) as any;
-    if (!row) return { amountCeiling: 50000, category: 'Electronics', allowedMerchants: ['Amazon', 'BestBuy'], sessionCap: 100000, version: 1 };
+    if (!row) return { amountCeiling: 50000, category: 'Electronics', merchantMode: 'allowlist', allowedMerchants: ['Amazon', 'BestBuy'], sessionCap: 100000, version: 1 };
     return {
       id: row.id ? String(row.id) : 'default_policy',
       version: row.version ?? 1,
       amountCeiling: row.amountCeiling ?? undefined,
       category: row.category ?? undefined,
+      merchantMode: row.merchantMode || (JSON.parse(row.allowedMerchants).length > 0 ? 'allowlist' : 'unrestricted'),
       allowedMerchants: JSON.parse(row.allowedMerchants),
       sessionCap: row.sessionCap ?? undefined,
       reasonableQuantity: row.reasonableQuantity ?? undefined,

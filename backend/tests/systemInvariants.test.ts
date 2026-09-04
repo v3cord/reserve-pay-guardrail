@@ -21,7 +21,7 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
       {
         amountCeiling: 100000, // ₹1000
         category: 'Food & Dining',
-        allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
+        merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Zomato', 'Blinkit'],
         sessionCap: 150000, // ₹1,500
         reasonableQuantity: 3,
         allowedMccCodes: ['5812', '5814'],
@@ -178,7 +178,7 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
     const policy: Policy = {
       amountCeiling: 50000, // ₹500
       category: 'Groceries',
-      allowedMerchants: ['Swiggy', 'Blinkit'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Blinkit'],
       sessionCap: 100000, // ₹1,000
       reasonableQuantity: 3,
       allowedMccCodes: ['5411'],

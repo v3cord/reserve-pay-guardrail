@@ -10,7 +10,7 @@ function agentId() {
 const DEFAULT_POLICY = {
   amountCeiling: 100000,
   category: 'Food & Dining',
-  allowedMerchants: ['Swiggy'],
+  merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
   sessionCap: 200000,
 };
 

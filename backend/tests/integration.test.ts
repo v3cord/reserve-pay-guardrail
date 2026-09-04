@@ -21,7 +21,7 @@ function agentId() {
 const DEFAULT_POLICY = {
   amountCeiling: 100000,
   category: 'Food & Dining',
-  allowedMerchants: ['Swiggy', 'Zomato'],
+  merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Zomato'],
   sessionCap: 200000,
   reasonableQuantity: 2,
 };
@@ -79,7 +79,7 @@ describe('Integration – full purchase flow', () => {
   });
 
   it('productId-based purchase resolves price from catalog', async () => {
-    const policy = { ...DEFAULT_POLICY, amountCeiling: 100000, allowedMerchants: ['Swiggy', 'Zomato'] };
+    const policy = { ...DEFAULT_POLICY, amountCeiling: 100000, merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Zomato'] };
     await store.setActivePolicy(policy, aid);
 
     const result = await store.processPurchaseAtomic({
@@ -144,7 +144,7 @@ describe('Integration – catalog resolution in purchase', () => {
     await store.setActivePolicy({
       amountCeiling: 300000,
       category: 'Electronics',
-      allowedMerchants: ['Amazon', 'BestBuy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Amazon', 'BestBuy'],
       sessionCap: 500000,
     }, aid);
   });

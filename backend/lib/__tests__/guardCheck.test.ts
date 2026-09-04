@@ -6,7 +6,7 @@ describe('guardCheck - Core Rule & Fail-Safe Tests', () => {
   const policy: Policy = {
     amountCeiling: 60000, // ₹600.00
     category: 'Electronics',
-    allowedMerchants: ['Amazon', 'BestBuy'],
+    merchantMode: 'allowlist', allowedMerchants: ['Amazon', 'BestBuy'],
     sessionCap: 100000, // ₹1000.00
     reasonableQuantity: 2,
   };
@@ -72,7 +72,7 @@ describe('guardCheck - Core Rule & Fail-Safe Tests', () => {
   it('Rule 3b Fail-Safe: freezes unbounded policy when amountCeiling is missing', async () => {
     const vaguePolicy: Policy = {
       category: 'Groceries',
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       sessionCap: 100000,
       // amountCeiling is intentionally undefined (vague intent)
     };
@@ -134,7 +134,7 @@ describe('guardCheck - Normalized & Fuzzy Merchant Matching', () => {
   const swiggyPolicy: Policy = {
     amountCeiling: 50000,
     category: 'Food & Dining',
-    allowedMerchants: ['Swiggy'],
+    merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
     sessionCap: 100000,
   };
 
@@ -182,7 +182,7 @@ describe('guardCheck - Normalized & Fuzzy Merchant Matching', () => {
     const amazonPolicy: Policy = {
       amountCeiling: 50000,
       category: 'Electronics',
-      allowedMerchants: ['Amazon'],
+      merchantMode: 'allowlist', allowedMerchants: ['Amazon'],
       sessionCap: 100000,
     };
     const purchase: AttemptedPurchase = {
@@ -199,7 +199,7 @@ describe('guardCheck - MCC & Category Aliasing Support', () => {
   const foodPolicy: Policy = {
     amountCeiling: 50000,
     category: 'Food & Dining',
-    allowedMerchants: ['Swiggy', 'Zomato'],
+    merchantMode: 'allowlist', allowedMerchants: ['Swiggy', 'Zomato'],
     sessionCap: 100000,
   };
 
@@ -257,7 +257,7 @@ describe('guardCheck - MCC & Category Aliasing Support', () => {
   it('approves purchase when policy specifies allowedMccCodes matching purchase mccCode', async () => {
     const mccPolicy: Policy = {
       amountCeiling: 50000,
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       allowedMccCodes: ['5812', '5814'],
       sessionCap: 100000,
     };
@@ -287,7 +287,7 @@ describe('guardCheck - Asymmetric Sub-Brand Matching (Least Privilege)', () => {
     const policy: Policy = {
       amountCeiling: 50000,
       category: 'Groceries',
-      allowedMerchants: ['Swiggy'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy'],
       sessionCap: 100000,
     };
     const purchase: AttemptedPurchase = {
@@ -303,7 +303,7 @@ describe('guardCheck - Asymmetric Sub-Brand Matching (Least Privilege)', () => {
     const restrictedPolicy: Policy = {
       amountCeiling: 50000,
       category: 'Food & Dining',
-      allowedMerchants: ['Swiggy Instamart'],
+      merchantMode: 'allowlist', allowedMerchants: ['Swiggy Instamart'],
       sessionCap: 100000,
     };
     const purchase: AttemptedPurchase = {
@@ -320,7 +320,7 @@ describe('guardCheck - Asymmetric Sub-Brand Matching (Least Privilege)', () => {
     const payPolicy: Policy = {
       amountCeiling: 50000,
       category: 'Electronics',
-      allowedMerchants: ['Pay'],
+      merchantMode: 'allowlist', allowedMerchants: ['Pay'],
       sessionCap: 100000,
     };
 
@@ -336,7 +336,7 @@ describe('guardCheck - Multi-Dimensional Quantity & Unit-Price Check', () => {
   const stationeryPolicy: Policy = {
     amountCeiling: 50000, // ₹500.00 (50,000 paise)
     category: 'Stationery',
-    allowedMerchants: ['StationeryHub'],
+    merchantMode: 'allowlist', allowedMerchants: ['StationeryHub'],
     sessionCap: 100000,
     reasonableQuantity: 2, // 2x limit = 4
   };
@@ -382,7 +382,7 @@ describe('guardCheck - Server-Side TTL & Expiry Timestamps', () => {
   const policy: Policy = {
     amountCeiling: 50000,
     category: 'Electronics',
-    allowedMerchants: ['Amazon'],
+    merchantMode: 'allowlist', allowedMerchants: ['Amazon'],
     sessionCap: 100000,
   };
 
