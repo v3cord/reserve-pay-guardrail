@@ -20,7 +20,7 @@ AI interprets intent.
 ↓
 Deterministic guardrail authorizes money.
 ↓
-PostgreSQL/SQLite atomically reserves funds.
+SQLite / PostgreSQL atomically reserves funds.
 ↓
 Razorpay executes the approved payment.
 ↓
@@ -71,7 +71,7 @@ Append-only ledger records every transition.
 
 **AI never authorizes money.** The AI extracts a spending policy (ceiling, category, merchants). A deterministic rule engine makes every allow/deny decision with no AI involvement. Extracted policies are clamped: `amountCeiling ≤ ₹1,00,000`, `sessionCap ≤ ₹10,00,000`.
 
-**Concurrency-safe fund reservation.** SQLite uses `BEGIN IMMEDIATE` transactions. PostgreSQL uses `SERIALIZABLE` isolation with `SELECT ... FOR UPDATE`. The Redis token bucket provides an additional ephemeral coordination layer. Zero overspend is enforced at the database level.
+**Concurrency-safe fund reservation.** SQLite uses `BEGIN IMMEDIATE` transactions. PostgreSQL uses `SERIALIZABLE` isolation with `SELECT ... FOR UPDATE`. An in-memory token bucket (or Redis/Upstash if configured) provides an additional ephemeral coordination layer. Zero overspend is enforced at the database level.
 
 **Tamper-evident append-only audit ledger.** Every state transition is recorded as a ledger event with:
 ```
@@ -89,7 +89,7 @@ The global per-agent sequence and previous-hash are computed under the same lock
 
 - Node.js 18+ and npm 9+
 - Optional: PostgreSQL/Supabase for production storage (SQLite used by default)
-- Optional: Redis for distributed token bucket (falls back to in-memory)
+- Optional: Redis or Upstash for distributed token bucket (falls back to in-memory)
 
 ### Setup
 
@@ -105,7 +105,21 @@ Visit `http://localhost:3000/dashboard`.
 
 ### Environment Variables
 
-See `.env.example` for all required and optional variables. The system runs fully in mock mode without real Razorpay or Gemini credentials — mock mode is clearly labeled in the UI.
+See `.env.example` for all required and optional variables. Key variables:
+
+| Variable | Purpose |
+|---|---|
+| `GEMINI_API_KEY` | Google Gemini API for intent parsing |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Razorpay API credentials |
+| `RAZORPAY_WEBHOOK_SECRET` | Webhook HMAC verification |
+| `NEXT_PUBLIC_RAZORPAY_KEY_ID` | Publishable key for browser |
+| `DATABASE_URL` | PostgreSQL connection string (omit for SQLite) |
+| `ADMIN_API_KEY` / `AGENT_API_KEY` | API authentication keys |
+| `JWT_SECRET` | Session JWT signing secret (min 32 chars) |
+| `REDIS_URL` | ioredis TCP Redis for distributed token bucket |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Upstash/Vercel KV for serverless token bucket |
+
+The system runs fully in mock mode without real Razorpay or Gemini credentials — mock mode is clearly labeled in the UI.
 
 ---
 
@@ -142,18 +156,18 @@ bash scripts/ci-gate.sh
 
 ## Attack Guardrail Demo
 
-Click **ATTACK GUARDRAIL** in the dashboard to run 8 adversarial scenarios against the real backend:
+Click **ATTACK GUARDRAIL** in the dashboard to run adversarial scenarios against the real backend:
 
-| # | Scenario | Expected Outcome |
-|---|----------|-----------------|
-| 1 | Amount overflow | DENIED — no Razorpay order |
-| 2 | Merchant violation | DENIED — no Razorpay order |
-| 3 | Category violation | DENIED — no Razorpay order |
-| 4 | Quantity anomaly | DENIED / REVIEW |
-| 5 | Prompt injection | SAFE — policy clamped within limits |
-| 6 | Duplicate request | DEDUPLICATED — second call returns cached |
-| 7 | Concurrent race | SAFE CONCURRENCY — zero overspend |
-| 8 | Gateway timeout → reconcile | RECONCILED — reservation released or order found |
+| Scenario | Expected Outcome |
+|----------|-----------------|
+| Amount overflow | DENIED — no Razorpay order |
+| Merchant violation | DENIED — no Razorpay order |
+| Category violation | DENIED — no Razorpay order |
+| Quantity anomaly | DENIED / REVIEW |
+| Prompt injection | SAFE — policy clamped within limits |
+| Duplicate request | DEDUPLICATED — second call returns cached |
+| Concurrent race | SAFE CONCURRENCY — zero overspend |
+| Gateway timeout → reconcile | RECONCILED — reservation released or order found |
 
 ---
 
@@ -165,29 +179,33 @@ The repo includes an MCP server (`backend/mcp-server/`) for Claude Desktop, Curs
 {
   "mcpServers": {
     "reserve-pay": {
-      "command": "node",
-      "args": ["path/to/backend/mcp-server/index.ts"]
+      "command": "npx",
+      "args": ["tsx", "path/to/backend/mcp-server/index.ts"]
     }
   }
 }
 ```
 
-Tools: `reserve_check_budget`, `reserve_request_purchase`, `reserve_explain_policy`.
+Tools exposed:
+- `reserve_check_budget` — returns real-time available budget, held funds, and active policy
+- `reserve_request_purchase` — evaluates and atomically executes a purchase through the guardrail
+- `reserve_explain_policy` — returns a plain-language explanation of spending restrictions
 
 ---
 
 ## What Is Real vs Simulated
 
-| Feature | Real |
-|---------|------|
+| Feature | Status |
+|---------|--------|
 | Gemini intent parsing (when API key set) | ✅ Real Gemini API call |
-| Guardrail policy enforcement | ✅ Deterministic rule engine |
+| Deterministic guardrail policy enforcement | ✅ Rule engine — no AI involvement |
 | Atomic fund reservation | ✅ SQLite WAL / PostgreSQL SERIALIZABLE |
 | Razorpay order creation (live keys) | ✅ Real Razorpay API |
 | Razorpay order creation (no keys) | ⚠️ Mock — labeled in UI |
-| Webhook verification | ✅ Real HMAC-SHA256 |
-| Ledger hash chain | ✅ Real SHA-256 |
+| Webhook HMAC-SHA256 verification | ✅ Real |
+| Ledger SHA-256 hash chain | ✅ Real |
 | Concurrency safety | ✅ Verified via tests |
+| Token bucket (no Redis configured) | ⚠️ In-memory fallback |
 
 ---
 
