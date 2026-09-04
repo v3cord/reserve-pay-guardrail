@@ -6,6 +6,9 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
+  experimental: {
+    instrumentationHook: true,
+  },
   async rewrites() {
     return [
       {
