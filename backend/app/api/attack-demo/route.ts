@@ -2,8 +2,6 @@ import { NextResponse } from 'next/server';
 import { authenticateRequest } from '../../../lib/auth';
 import { getStore, getActivePolicy, getReserveState, releaseReservation } from '../../../lib/store';
 import { runReconciliation } from '../../../lib/reconciler';
-import { v4 as uuidv4 } from 'crypto';
-
 function uid(): string {
   return `${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
