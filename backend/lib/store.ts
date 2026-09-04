@@ -8,7 +8,7 @@ import { SqliteReserveStore } from './sqliteStore';
 import { publishUpdate } from './events';
 
 export { GENESIS_PREV_HASH, calculateTransactionHash } from './crypto';
-export { setTokenBucket, getTokenBucket, InMemoryTokenBucket, RedisTokenBucket } from './tokenBucket';
+export { setTokenBucket, getTokenBucket, InMemoryTokenBucket, RedisTokenBucket, UpstashTokenBucket } from './tokenBucket';
 export { PostgresReserveStore } from './postgresStore';
 export { SqliteReserveStore } from './sqliteStore';
 
