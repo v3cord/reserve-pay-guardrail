@@ -218,15 +218,16 @@ export class UpstashTokenBucket implements IRedisTokenBucket {
       if (agentId) {
         await this.client.del(this.key(agentId));
       } else {
-        // Scan-delete all token_bucket:* keys
-        let cursor = 0;
+        // Scan-delete all token_bucket:* keys.
+        // Upstash scan returns [cursorString, keys[]] — compare cursor to '0', not 0.
+        let cursor = '0';
         do {
           const [nextCursor, keys] = await this.client.scan(cursor, { match: 'token_bucket:*', count: 100 });
           cursor = nextCursor;
           if (keys.length > 0) {
             await this.client.del(...keys);
           }
-        } while (cursor !== 0);
+        } while (cursor !== '0');
       }
     } catch (err) {
       console.error('[UpstashTokenBucket] reset error', err);
