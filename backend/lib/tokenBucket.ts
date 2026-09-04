@@ -117,8 +117,14 @@ export class UpstashTokenBucket implements IRedisTokenBucket {
   }
 
   /**
-   * Atomic check-and-decrement via optimistic locking (WATCH → GET → SET).
-   * Retries up to 5 times on contention before falling back to fail-closed.
+   * Fully atomic check-and-decrement.
+   *
+   * The GET, the budget check, and the SET are all inside a single Lua script
+   * sent to Upstash's /eval endpoint. Redis executes Lua atomically — no other
+   * command can interleave between the read and the write. There are no
+   * separate client-side GET/SET calls and no retry loop needed.
+   *
+   * Returns: [allowed(0|1), remaining_after_operation]
    */
   async acquireReserveToken(
     agentId: string,
@@ -127,56 +133,43 @@ export class UpstashTokenBucket implements IRedisTokenBucket {
   ): Promise<TokenBucketAcquireResult> {
     const k = this.key(agentId);
     const cap = sessionCapPaise || 1000000;
-    const MAX_RETRIES = 5;
 
-    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      try {
-        // 1. Read current balance (initialise to cap if missing)
-        const raw = await this.client.get<string>(k);
-        const current = raw !== null ? parseInt(raw as string, 10) : cap;
+    try {
+      const res = await this.client.eval(
+        `local current = redis.call('get', KEYS[1])
+         if not current then
+           current = tonumber(ARGV[2])
+         else
+           current = tonumber(current)
+         end
+         local amount = tonumber(ARGV[1])
+         if current >= amount then
+           local remaining = current - amount
+           redis.call('set', KEYS[1], tostring(remaining))
+           return {1, remaining}
+         else
+           return {0, current}
+         end`,
+        [k],
+        [amountPaise.toString(), cap.toString()]
+      ) as [number, number];
 
-        if (current < amountPaise) {
-          return { allowed: false, remainingPaise: current, remainingBudgetPaise: current };
-        }
-
-        const next = current - amountPaise;
-
-        // 2. Conditional SET: only write if value hasn't changed (compare-and-swap
-        //    via a Lua script that Upstash DOES support via /eval endpoint)
-        const cas = await this.client.eval(
-          // Lua: only decrement if value still matches what we read
-          `local cur = redis.call('get', KEYS[1])
-           if not cur then cur = tostring(ARGV[3]) end
-           if tostring(cur) == tostring(ARGV[1]) then
-             redis.call('set', KEYS[1], ARGV[2])
-             return 1
-           else
-             return 0
-           end`,
-          [k],
-          [current.toString(), next.toString(), cap.toString()]
-        ) as number;
-
-        if (cas === 1) {
-          return { allowed: true, remainingPaise: next, remainingBudgetPaise: next };
-        }
-        // CAS failed — another request raced us; retry
-      } catch (err) {
-        console.error('[UpstashTokenBucket] acquireReserveToken error', err);
-        break;
+      const allowed = res[0] === 1;
+      const remaining = res[1];
+      return { allowed, remainingPaise: remaining, remainingBudgetPaise: remaining };
+    } catch (err) {
+      console.error('[UpstashTokenBucket] acquireReserveToken error', err);
+      // Fail-closed in production
+      if (process.env.NODE_ENV === 'production') {
+        return {
+          allowed: false,
+          remainingPaise: 0,
+          remainingBudgetPaise: 0,
+          reason: 'Budget cluster unavailable — request rejected (fail-closed).',
+        };
       }
+      return this.fallback.acquireReserveToken(agentId, amountPaise, sessionCapPaise);
     }
-
-    // Fail-closed on Vercel production after exhausting retries
-    if (process.env.NODE_ENV === 'production') {
-      return {
-        allowed: false,
-        remainingPaise: 0,
-        remainingBudgetPaise: 0,
-        reason: 'Budget cluster contention or unavailable — request rejected (fail-closed).',
-      };
-    }
-    return this.fallback.acquireReserveToken(agentId, amountPaise, sessionCapPaise);
   }
 
   async acquireReserve(agentId: string, requestedPaise: number, initialTotalPaise?: number): Promise<TokenBucketAcquireResult> {
