@@ -22,8 +22,7 @@ Deterministic guardrail authorizes money.
 ↓
 SQLite / PostgreSQL atomically reserves funds.
 ↓
-Razorpay executes the approved payment.
-↓
+Razorpay executes the approved payment.↓
 Webhooks confirm payment.
 ↓
 Append-only ledger records every transition.
