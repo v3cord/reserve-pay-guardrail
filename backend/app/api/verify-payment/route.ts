@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     }
 
     const body = JSON.parse(rawBody || '{}');
-    const { razorpay_order_id, razorpay_payment_id, razorpay_signature, agentId } = body;
+    const { razorpay_order_id, razorpay_payment_id, razorpay_signature } = body;
 
     if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
       return NextResponse.json(
@@ -41,7 +41,10 @@ export async function POST(request: Request) {
       .update(`${razorpay_order_id}|${razorpay_payment_id}`)
       .digest('hex');
 
-    const isMockOrder = process.env.NODE_ENV !== 'production' && razorpay_order_id.startsWith('order_test_mock_');
+    const isMockOrder = process.env.NODE_ENV !== 'production' && (
+      razorpay_order_id.startsWith('order_test_mock_') ||
+      razorpay_order_id.startsWith('order_mock_')
+    );
 
     const isVerified = isMockOrder || (
       razorpay_signature.length === generatedSignature.length &&
@@ -65,7 +68,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const targetAgentId = agentId || auth.context?.agentId || 'default_agent';
+    const targetAgentId = auth.context?.agentId || 'default_agent';
     const settleResult = await settleTransaction(razorpay_order_id, razorpay_payment_id, targetAgentId);
 
     return NextResponse.json({

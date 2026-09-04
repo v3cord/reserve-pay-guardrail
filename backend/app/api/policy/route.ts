@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     }
 
     const body = JSON.parse(rawBody || '{}');
-    const agentId = body.agentId || auth.context?.agentId || 'default_agent';
+    const agentId = auth.context?.agentId || 'default_agent';
     const policy = await setActivePolicy(body.policy || body, agentId);
     return NextResponse.json({ message: 'Policy updated successfully', policy });
   } catch (err: unknown) {

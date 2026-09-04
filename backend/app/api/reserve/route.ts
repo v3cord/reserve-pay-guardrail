@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getReserveState, setReserveState, verifyLedgerIntegrity, getLedgerEvents } from '../../../lib/store';
+import { getReserveState, setReserveState, verifyLedgerIntegrity, getLedgerEvents, getStore } from '../../../lib/store';
 import { authenticateRequest } from '../../../lib/auth';
 
 export async function GET(request: Request) {
@@ -17,6 +17,9 @@ export async function GET(request: Request) {
   const url = request?.url ? new URL(request.url) : null;
   const agentId = url?.searchParams.get('agentId') || auth.context?.agentId || 'default_agent';
   const sessionId = url?.searchParams.get('sessionId') || undefined;
+
+  // Phase 8: Lazy expiration — expire stale reservations before reading state
+  await getStore().expireStaleTransactions(agentId);
 
   const state = await getReserveState(agentId, sessionId);
   const ledgerIntegrity = await verifyLedgerIntegrity(agentId);
@@ -45,7 +48,7 @@ export async function POST(request: Request) {
     }
 
     const body = JSON.parse(rawBody || '{}');
-    const agentId = body.agentId || auth.context?.agentId || 'default_agent';
+    const agentId = auth.context?.agentId || 'default_agent';
 
     if (typeof body.totalPaise === 'number' || typeof body.total === 'number') {
       const totalPaise = typeof body.totalPaise === 'number' ? body.totalPaise : Math.round(body.total * 100);

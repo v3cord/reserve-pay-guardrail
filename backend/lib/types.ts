@@ -1,4 +1,4 @@
-﻿export interface Policy {
+export interface Policy {
   id?: string;
   version?: number;
   amountCeiling?: number; // In integer Paise
@@ -109,6 +109,8 @@ export interface Transaction {
   tenantId?: string;
   productId?: string;
   catalogVersion?: string;
+  resolvedMerchantId?: string;
+  resolvedUnitPricePaise?: number;
   capturedPaise?: number;
   refundedPaise?: number;
   remainingRefundablePaise?: number;
@@ -161,6 +163,27 @@ export interface PurchaseRequestBody extends AttemptedPurchase {
   catalogVersion?: string;
 }
 
+export interface PolicyCheckLine {
+  rule: 'AMOUNT' | 'MERCHANT' | 'CATEGORY' | 'QUANTITY' | 'SESSION';
+  passed: boolean;
+  detail: string;
+  limit?: string;
+  actual?: string;
+}
+
+export interface PolicyExplanation {
+  checks: PolicyCheckLine[];
+  decision: 'APPROVED' | 'REVIEW' | 'DENIED';
+  policyVersion: number;
+  policyId: string;
+  catalogVersion?: string;
+  resolvedProductId?: string;
+  resolvedMerchant?: string;
+  resolvedPrice?: number;
+  resolvedCategory?: string;
+  resolvedMcc?: string;
+}
+
 export interface GuardCheckResult {
   decision: DecisionStatus | 'approve' | 'freeze';
   paymentStatus?: PaymentStatus;
@@ -171,6 +194,7 @@ export interface GuardCheckResult {
   requestedPaise?: number;
   policyId?: string;
   policyVersion?: number;
+  policyExplanation?: PolicyExplanation;
   updatedReserveState: ReserveState;
   ledgerEvent?: LedgerEvent;
   transaction?: Transaction;
@@ -314,6 +338,7 @@ export interface IReserveStore {
   claimWebhookEvent(eventId: string, eventType: string, payloadHash: string): Promise<boolean>;
   settleTransaction(txIdOrOrderId: string, razorpayPaymentId?: string, agentId?: string): Promise<SettleResult>;
   releaseReservation(txIdOrOrderId: string, reason?: string, agentId?: string): Promise<ReleaseResult>;
+  getTransactionByIdOrOrderId(identifier: string, agentId?: string): Promise<Transaction | null> | Transaction | null;
   processRefund(orderIdOrPaymentId: string, refundAmountPaise: number, refundId?: string, reason?: string, agentId?: string): Promise<RefundResult> | RefundResult;
   disputeTransaction(orderIdOrPaymentId: string, disputeReason?: string, agentId?: string): Promise<DisputeResult> | DisputeResult;
   verifyLedgerIntegrity(agentId?: string): Promise<LedgerIntegrityResult> | LedgerIntegrityResult;
@@ -331,4 +356,24 @@ export interface IReserveStore {
   failIdempotencyKey(tenantId: string, agentId: string, key: string): Promise<void>;
   flagOrderCreationUnknown(txId: string, agentId?: string): Promise<void>;
   reconcileStaleTransactions?(): Promise<{ reconciledCount: number; releasedCount: number }>;
+}
+
+export const VALID_PAYMENT_TRANSITIONS: Record<PaymentStatus, PaymentStatus[]> = {
+  'requested': ['reserved', 'failed'],
+  'reserved': ['order_creation_unknown', 'order_created', 'authorized', 'captured', 'released', 'expired', 'failed'],
+  'order_creation_unknown': ['order_created', 'released', 'failed'],
+  'order_created': ['authorized', 'captured', 'released', 'failed'],
+  'authorized': ['captured', 'released', 'failed'],
+  'captured': ['partially_refunded', 'refunded', 'disputed'],
+  'released': [],
+  'expired': [],
+  'failed': [],
+  'partially_refunded': ['partially_refunded', 'refunded', 'disputed'],
+  'refunded': ['disputed'],
+  'disputed': [],
+};
+
+export function isValidTransition(from: PaymentStatus, to: PaymentStatus): boolean {
+  const allowed = VALID_PAYMENT_TRANSITIONS[from];
+  return allowed ? allowed.includes(to) : false;
 }

@@ -123,6 +123,13 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
       );
     `);
 
+    // Phase 6: Global per-agent sequence uniqueness constraint
+    await client.query(`
+      ALTER TABLE ledger_events ADD CONSTRAINT IF NOT EXISTS uq_ledger_agent_global_seq UNIQUE (agent_id, sequence_num);
+    `).catch(() => {
+      // Constraint may already exist on existing DBs — safe to ignore
+    });
+
     await client.query(`
       CREATE TABLE IF NOT EXISTS idempotency_keys (
         tenant_id VARCHAR(255) NOT NULL,
@@ -131,10 +138,19 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
         request_hash VARCHAR(64) NOT NULL,
         status VARCHAR(64) NOT NULL,
         response JSONB,
+        owner_token VARCHAR(255),
+        lease_expires_at TIMESTAMPTZ,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (tenant_id, agent_id, key)
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS owner_token VARCHAR(255);
+    `);
+    await client.query(`
+      ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
     `);
 
     await client.query(`
@@ -160,6 +176,22 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
         ip VARCHAR(128),
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+    `);
+
+    // Financial performance indexes
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_transactions_agent_session_status
+      ON transactions (agent_id, session_id, payment_status);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_transactions_razorpay_order
+      ON transactions (razorpay_order_id) WHERE razorpay_order_id IS NOT NULL;
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_transactions_payment_status
+      ON transactions (payment_status) WHERE payment_status = 'order_creation_unknown';
     `);
 
     await client.query('COMMIT');
@@ -344,6 +376,11 @@ export function initDatabase() {
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_policies_agentId ON policies(agentId);'); } catch {}
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_reserve_state_agentId ON reserve_state(agentId);'); } catch {}
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_tx_seq ON ledger_events(transactionId, sequenceNum);'); } catch {}
+  // Phase 6: Global per-agent sequence uniqueness — prevents race conditions in hash chain
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_agent_global_seq ON ledger_events(agentId, sequenceNum);'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_agent_session_status ON transactions(agentId, sessionId, paymentStatus);'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_razorpay_order ON transactions(razorpayOrderId);'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_transactions_payment_status ON transactions(paymentStatus);'); } catch {}
 
   const policyCount = db.prepare("SELECT COUNT(*) as count FROM policies WHERE agentId = 'default_agent' OR id = 1").get() as { count: number };
   if (policyCount.count === 0) {

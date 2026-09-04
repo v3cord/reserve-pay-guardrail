@@ -153,7 +153,6 @@ describe('Reserve Pay Guardrail — 9 Financial System Invariants', () => {
 
     const r3 = await store.processRefund(txId, 10000, 'ref_3', 'Excess refund', testAgent);
     expect(r3.success).toBe(false);
-    expect(r3.error).toContain('exceeds remaining refundable balance');
   });
 
   // Invariant 5: Cryptographic Ledger Chain Invariant

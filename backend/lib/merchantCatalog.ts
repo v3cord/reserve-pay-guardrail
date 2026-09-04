@@ -169,6 +169,10 @@ export function getAllCatalogProducts(): CatalogProduct[] {
   return Object.values(CATALOG_PRODUCTS);
 }
 
+export function getCatalogVersion(): string {
+  return CURRENT_CATALOG_VERSION;
+}
+
 export function findCatalogProductBySearch(query: string): CatalogProduct | null {
   if (!query) return null;
   const lower = query.toLowerCase();
@@ -182,4 +186,47 @@ export function findCatalogProductBySearch(query: string): CatalogProduct | null
     }
   }
   return null;
+}
+
+export interface CatalogSearchFilters {
+  category?: string;
+  maxPricePaise?: number;
+}
+
+/**
+ * Search catalog by free-text query with optional filters.
+ * Returns ranked matches: name match first, then merchant, then category.
+ */
+export function searchCatalog(query: string, filters?: CatalogSearchFilters): CatalogProduct[] {
+  const lower = (query || '').toLowerCase().trim();
+  const products = Object.values(CATALOG_PRODUCTS);
+
+  const scored = products
+    .map((p) => {
+      let score = 0;
+      if (lower) {
+        if (p.name?.toLowerCase().includes(lower)) score += 10;
+        if (p.merchantName.toLowerCase().includes(lower)) score += 8;
+        if (p.productId.toLowerCase().includes(lower)) score += 6;
+        if (p.category.toLowerCase().includes(lower)) score += 4;
+      } else {
+        score = 1; // Return all when no query
+      }
+
+      // Apply filters
+      if (filters?.category) {
+        const filterCat = filters.category.toLowerCase();
+        if (!p.category.toLowerCase().includes(filterCat)) return null;
+      }
+      if (filters?.maxPricePaise !== undefined) {
+        if (p.unitPricePaise > filters.maxPricePaise) return null;
+      }
+
+      return score > 0 ? { product: p, score } : null;
+    })
+    .filter((x): x is { product: CatalogProduct; score: number } => x !== null);
+
+  return scored
+    .sort((a, b) => b.score - a.score)
+    .map((x) => x.product);
 }

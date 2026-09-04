@@ -41,14 +41,26 @@ export class PostgresReserveStore implements IReserveStore {
   ): Promise<LedgerEvent> {
     const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const timestamp = event.timestamp || new Date().toISOString();
-    const prevHash = await this.getLastLedgerEventHash(event.agentId);
 
     const client = await this.pool.connect();
     try {
-      await client.query('BEGIN');
+      // Use SERIALIZABLE isolation to serialize all ledger appends for this agent.
+      // This prevents two concurrent writers from computing the same prevHash.
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+
+      // Global prev hash: last event for this agent (not per-transaction)
+      const prevHashRes = await client.query(
+        'SELECT hash FROM ledger_events WHERE agent_id = $1 ORDER BY sequence_num DESC LIMIT 1 FOR UPDATE',
+        [event.agentId || 'default_agent']
+      );
+      const prevHash = prevHashRes.rows.length > 0 && prevHashRes.rows[0].hash
+        ? prevHashRes.rows[0].hash
+        : GENESIS_PREV_HASH;
+
+      // Global sequence: per-agent across all transactions
       const seqRes = await client.query(
-        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
-        [event.transactionId]
+        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE agent_id = $1',
+        [event.agentId || 'default_agent']
       );
       const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
 
@@ -136,47 +148,61 @@ export class PostgresReserveStore implements IReserveStore {
     requestHash: string
   ): Promise<{ status: 'CLAIMED' | 'CACHED' | 'MISMATCH' | 'PROCESSING'; cachedResponse?: Record<string, unknown>; ownerToken?: string }> {
     const ownerToken = `owner_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const leaseSeconds = 30;
 
-    const insertRes = await this.pool.query(`
+    // Single atomic INSERT ... ON CONFLICT ... RETURNING — zero TOCTOU window
+    const result = await this.pool.query(`
       INSERT INTO idempotency_keys (tenant_id, agent_id, key, request_hash, status, owner_token, lease_expires_at, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, 'PROCESSING', $5, NOW() + INTERVAL '30 seconds', NOW(), NOW())
-      ON CONFLICT (tenant_id, agent_id, key) DO NOTHING
-      RETURNING *
+      VALUES ($1, $2, $3, $4, 'PROCESSING', $5, NOW() + INTERVAL '${leaseSeconds} seconds', NOW(), NOW())
+      ON CONFLICT (tenant_id, agent_id, key) DO UPDATE SET
+        -- Only reclaim if FAILED or lease expired; otherwise leave unchanged
+        status = CASE
+          WHEN idempotency_keys.status = 'FAILED' OR idempotency_keys.lease_expires_at < NOW() OR idempotency_keys.lease_expires_at IS NULL
+          THEN 'PROCESSING'
+          ELSE idempotency_keys.status
+        END,
+        owner_token = CASE
+          WHEN idempotency_keys.status = 'FAILED' OR idempotency_keys.lease_expires_at < NOW() OR idempotency_keys.lease_expires_at IS NULL
+          THEN $5
+          ELSE idempotency_keys.owner_token
+        END,
+        lease_expires_at = CASE
+          WHEN idempotency_keys.status = 'FAILED' OR idempotency_keys.lease_expires_at < NOW() OR idempotency_keys.lease_expires_at IS NULL
+          THEN NOW() + INTERVAL '${leaseSeconds} seconds'
+          ELSE idempotency_keys.lease_expires_at
+        END,
+        updated_at = NOW()
+      RETURNING *, (xmax = 0) AS was_inserted
     `, [tenantId, agentId, key, requestHash, ownerToken]);
 
-    if ((insertRes.rowCount ?? 0) > 0) {
+    const row = result.rows[0];
+    if (!row) {
+      // Should never happen with INSERT...ON CONFLICT...RETURNING, but handle defensively
       return { status: 'CLAIMED', ownerToken };
     }
 
-    const res = await this.pool.query(
-      'SELECT * FROM idempotency_keys WHERE tenant_id = $1 AND agent_id = $2 AND key = $3',
-      [tenantId, agentId, key]
-    );
-
-    if (res.rows.length === 0) {
+    // Fresh insert — we own the claim
+    if (row.was_inserted) {
       return { status: 'CLAIMED', ownerToken };
     }
 
-    const existing = res.rows[0];
-    if (existing.request_hash !== requestHash) {
+    // Existing row — check hash match first
+    if (row.request_hash !== requestHash) {
       return { status: 'MISMATCH' };
     }
-    if (existing.status === 'COMPLETED' && existing.response) {
-      const cached = typeof existing.response === 'string' ? JSON.parse(existing.response) : existing.response;
+
+    // Completed with cached response
+    if (row.status === 'COMPLETED' && row.response) {
+      const cached = typeof row.response === 'string' ? JSON.parse(row.response) : row.response;
       return { status: 'CACHED', cachedResponse: cached };
     }
 
-    const updateRes = await this.pool.query(`
-      UPDATE idempotency_keys
-      SET status = 'PROCESSING', owner_token = $1, lease_expires_at = NOW() + INTERVAL '30 seconds', updated_at = NOW()
-      WHERE tenant_id = $2 AND agent_id = $3 AND key = $4 AND (status = 'FAILED' OR lease_expires_at < NOW() OR lease_expires_at IS NULL)
-      RETURNING *
-    `, [ownerToken, tenantId, agentId, key]);
-
-    if ((updateRes.rowCount ?? 0) > 0) {
+    // We reclaimed a FAILED/expired lease
+    if (row.owner_token === ownerToken) {
       return { status: 'CLAIMED', ownerToken };
     }
 
+    // Another worker is currently processing
     return { status: 'PROCESSING' };
   }
 
@@ -549,6 +575,11 @@ export class PostgresReserveStore implements IReserveStore {
         ]);
       }
 
+      // Release Redis budget if guard denied — Redis is ephemeral, not source of truth
+      if (result.decision !== 'allowed' && !purchase.override) {
+        await this.tokenBucket.releaseReserve(agentId, purchase.amount ?? 0);
+      }
+
       await client.query('COMMIT');
       return result;
     } catch (err) {
@@ -557,6 +588,48 @@ export class PostgresReserveStore implements IReserveStore {
     } finally {
       client.release();
     }
+  }
+
+  async getTransactionByIdOrOrderId(identifier: string, agentId?: string): Promise<Transaction | null> {
+    let query = 'SELECT * FROM transactions WHERE (id = $1 OR razorpay_order_id = $1 OR razorpay_payment_id = $1)';
+    const params: unknown[] = [identifier];
+    if (agentId) {
+      query += ' AND agent_id = $2';
+      params.push(agentId);
+    }
+    query += ' LIMIT 1';
+    const res = await this.pool.query(query, params);
+    if (res.rows.length === 0) return null;
+    const row = res.rows[0];
+    return {
+      id: row.id,
+      merchant: row.merchant,
+      amount: parseInt(row.amount, 10),
+      category: row.category,
+      quantity: row.quantity ? parseFloat(row.quantity) : undefined,
+      status: row.status,
+      decisionStatus: row.decision_status || undefined,
+      paymentStatus: row.payment_status || undefined,
+      decision: row.decision_status || undefined,
+      reason: row.reason || undefined,
+      timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : new Date().toISOString(),
+      mccCode: row.mcc_code || undefined,
+      productId: row.product_id || undefined,
+      catalogVersion: row.catalog_version || undefined,
+      hash: row.hash || '',
+      prevHash: row.prev_hash || '',
+      razorpayOrderId: row.razorpay_order_id || undefined,
+      razorpayPaymentId: row.razorpay_payment_id || undefined,
+      agentId: row.agent_id || undefined,
+      policyId: row.policy_id || undefined,
+      policyVersion: row.policy_version || undefined,
+      sessionId: row.session_id || undefined,
+      tenantId: row.tenant_id || undefined,
+      capturedPaise: row.captured_paise ? parseInt(row.captured_paise, 10) : 0,
+      refundedPaise: row.refunded_paise ? parseInt(row.refunded_paise, 10) : 0,
+      remainingRefundablePaise: Math.max(0, (row.captured_paise ? parseInt(row.captured_paise, 10) : 0) - (row.refunded_paise ? parseInt(row.refunded_paise, 10) : 0)),
+      expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : undefined,
+    };
   }
 
   async settleTransaction(
@@ -580,6 +653,20 @@ export class PostgresReserveStore implements IReserveStore {
 
       const tx = txRes.rows[0];
       const amount = parseInt(tx.amount, 10);
+      const currentPaymentStatus = tx.payment_status;
+
+      // Idempotent: already captured
+      if (currentPaymentStatus === 'captured' || currentPaymentStatus === 'partially_refunded' || currentPaymentStatus === 'refunded') {
+        await client.query('ROLLBACK');
+        return { success: true, transactionId: tx.id };
+      }
+
+      // Validate state transition: only reserved/order_created/authorized/order_creation_unknown can become captured
+      const captureableStatuses = ['reserved', 'order_creation_unknown', 'order_created', 'authorized'];
+      if (!captureableStatuses.includes(currentPaymentStatus)) {
+        await client.query('ROLLBACK');
+        return { success: false, error: `Invalid state transition: cannot capture from '${currentPaymentStatus}'` };
+      }
 
       await client.query(`
         UPDATE transactions
@@ -590,15 +677,116 @@ export class PostgresReserveStore implements IReserveStore {
         WHERE id = $3
       `, [amount, razorpayPaymentId ?? null, tx.id]);
 
-      if (tx.status === 'reserved' || tx.payment_status === 'reserved' || tx.payment_status === 'order_created' || tx.payment_status === 'authorized') {
-        await client.query(
-          'UPDATE reserve_state SET held_paise = GREATEST(0, held_paise - $1), settled_paise = settled_paise + $1, updated_at = NOW() WHERE agent_id = $2',
-          [amount, agentId]
-        );
-      }
+      // Lock reserve_state and move from held to settled
+      await client.query('SELECT * FROM reserve_state WHERE agent_id = $1 FOR UPDATE', [agentId]);
+      await client.query(
+        'UPDATE reserve_state SET held_paise = GREATEST(0, held_paise - $1), settled_paise = settled_paise + $1, updated_at = NOW() WHERE agent_id = $2',
+        [amount, agentId]
+      );
+
+      // Append PAYMENT_CAPTURED ledger event
+      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const timestamp = new Date().toISOString();
+      const prevEvtHash = await this.getLastLedgerEventHash(tx.agent_id || agentId);
+      const payloadHash = calculatePayloadHash({ amount, razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id });
+      const seqRes = await client.query(
+        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
+        [tx.id]
+      );
+      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
+      const evtHash = calculateLedgerEventHash({
+        id: eventId, transactionId: tx.id, eventType: 'PAYMENT_CAPTURED',
+        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      });
+
+      await client.query(`
+        INSERT INTO ledger_events (
+          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
+        ) VALUES ($1, $2, $3, $4, 'PAYMENT_CAPTURED', $5::jsonb, $6, $7, $8, $9, $10, $11)
+      `, [
+        eventId, tx.id, tx.tenant_id || 'default_tenant', agentId,
+        JSON.stringify({ amount, razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id }),
+        sequenceNum, prevEvtHash, evtHash, tx.policy_id || null, tx.policy_version || 1, timestamp
+      ]);
 
       await client.query('COMMIT');
       return { success: true, transactionId: tx.id };
+    } catch (err: unknown) {
+      await client.query('ROLLBACK');
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: errorMsg };
+    } finally {
+      client.release();
+    }
+  }
+
+  async authorizeTransaction(
+    txIdOrOrderId: string,
+    razorpayPaymentId?: string,
+    agentId = 'default_agent'
+  ): Promise<{ success: boolean; error?: string }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const txRes = await client.query(
+        'SELECT * FROM transactions WHERE (id = $1 OR razorpay_order_id = $1) AND agent_id = $2 FOR UPDATE',
+        [txIdOrOrderId, agentId]
+      );
+      if (txRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return { success: false, error: 'Transaction not found' };
+      }
+      const tx = txRes.rows[0];
+      const currentStatus = tx.payment_status;
+
+      // Idempotent: already authorized or further along
+      if (['authorized', 'captured', 'partially_refunded', 'refunded'].includes(currentStatus)) {
+        await client.query('ROLLBACK');
+        return { success: true };
+      }
+
+      // Only transition from reserved/order_created states
+      const authorizableStatuses = ['reserved', 'order_creation_unknown', 'order_created'];
+      if (!authorizableStatuses.includes(currentStatus)) {
+        await client.query('ROLLBACK');
+        return { success: false, error: `Invalid state transition: cannot authorize from '${currentStatus}'` };
+      }
+
+      await client.query(`
+        UPDATE transactions
+        SET status = 'authorized',
+            payment_status = 'authorized',
+            razorpay_payment_id = COALESCE($1, razorpay_payment_id)
+        WHERE id = $2
+      `, [razorpayPaymentId ?? null, tx.id]);
+
+      // Append ledger event — funds remain in heldPaise
+      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const timestamp = new Date().toISOString();
+      const prevEvtHash = await this.getLastLedgerEventHash(tx.agent_id || agentId);
+      const payloadHash = calculatePayloadHash({ razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id, status: 'authorized' });
+      const seqRes = await client.query(
+        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
+        [tx.id]
+      );
+      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
+      const evtHash = calculateLedgerEventHash({
+        id: eventId, transactionId: tx.id, eventType: 'ORDER_ATTACHED',
+        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      });
+
+      await client.query(`
+        INSERT INTO ledger_events (
+          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
+        ) VALUES ($1, $2, $3, $4, 'ORDER_ATTACHED', $5::jsonb, $6, $7, $8, $9, $10, $11)
+      `, [
+        eventId, tx.id, tx.tenant_id || 'default_tenant', agentId,
+        JSON.stringify({ razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id, status: 'authorized' }),
+        sequenceNum, prevEvtHash, evtHash, tx.policy_id || null, tx.policy_version || 1, timestamp
+      ]);
+
+      await client.query('COMMIT');
+      return { success: true };
     } catch (err: unknown) {
       await client.query('ROLLBACK');
       const errorMsg = err instanceof Error ? err.message : String(err);
@@ -629,18 +817,57 @@ export class PostgresReserveStore implements IReserveStore {
 
       const tx = txRes.rows[0];
       const amount = parseInt(tx.amount, 10);
+      const currentPaymentStatus = tx.payment_status;
+
+      // Idempotent: already released or expired
+      if (currentPaymentStatus === 'released' || currentPaymentStatus === 'expired') {
+        await client.query('ROLLBACK');
+        return { success: true, transactionId: tx.id, releasedAmountPaise: 0 };
+      }
+
+      // Only release from held states
+      const releaseableStatuses = ['reserved', 'order_creation_unknown', 'order_created'];
+      if (!releaseableStatuses.includes(currentPaymentStatus)) {
+        await client.query('ROLLBACK');
+        return { success: false, error: `Invalid state transition: cannot release from '${currentPaymentStatus}'` };
+      }
 
       await client.query(
         "UPDATE transactions SET status = 'released', payment_status = 'released', decision_status = 'allowed', reason = $1 WHERE id = $2",
         [reason, tx.id]
       );
 
-      if (tx.status === 'reserved' || tx.payment_status === 'reserved' || tx.payment_status === 'order_creation_unknown' || tx.payment_status === 'order_created') {
-        await client.query(
-          'UPDATE reserve_state SET held_paise = GREATEST(0, held_paise - $1), updated_at = NOW() WHERE agent_id = $2',
-          [amount, agentId]
-        );
-      }
+      // Lock reserve_state and decrement held
+      await client.query('SELECT * FROM reserve_state WHERE agent_id = $1 FOR UPDATE', [agentId]);
+      await client.query(
+        'UPDATE reserve_state SET held_paise = GREATEST(0, held_paise - $1), updated_at = NOW() WHERE agent_id = $2',
+        [amount, agentId]
+      );
+
+      // Append RESERVATION_RELEASED ledger event
+      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const timestamp = new Date().toISOString();
+      const prevEvtHash = await this.getLastLedgerEventHash(tx.agent_id || agentId);
+      const payloadHash = calculatePayloadHash({ releasedAmount: amount, reason });
+      const seqRes = await client.query(
+        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
+        [tx.id]
+      );
+      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
+      const evtHash = calculateLedgerEventHash({
+        id: eventId, transactionId: tx.id, eventType: 'RESERVATION_RELEASED',
+        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      });
+
+      await client.query(`
+        INSERT INTO ledger_events (
+          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
+        ) VALUES ($1, $2, $3, $4, 'RESERVATION_RELEASED', $5::jsonb, $6, $7, $8, $9, $10, $11)
+      `, [
+        eventId, tx.id, tx.tenant_id || 'default_tenant', agentId,
+        JSON.stringify({ releasedAmount: amount, reason }),
+        sequenceNum, prevEvtHash, evtHash, tx.policy_id || null, tx.policy_version || 1, timestamp
+      ]);
 
       await client.query('COMMIT');
       return { success: true, transactionId: tx.id, releasedAmountPaise: amount };
@@ -658,6 +885,15 @@ export class PostgresReserveStore implements IReserveStore {
       "UPDATE transactions SET payment_status = 'order_creation_unknown', reason = 'Razorpay order creation timed out — queued for reconciliation' WHERE id = $1 AND agent_id = $2",
       [txId, agentId]
     );
+
+    await this.appendLedgerEvent({
+      transactionId: txId,
+      tenantId: 'default_tenant',
+      agentId,
+      eventType: 'ORDER_UNKNOWN_FLAGGED',
+      payload: { reason: 'Network drop/timeout during order creation' },
+      timestamp: new Date().toISOString(),
+    });
   }
 
   async processRefund(
@@ -682,6 +918,26 @@ export class PostgresReserveStore implements IReserveStore {
       }
 
       const originalTx = txRes.rows[0];
+      const currentPaymentStatus = originalTx.payment_status;
+
+      // Only captured/partially_refunded transactions can be refunded
+      if (!['captured', 'partially_refunded'].includes(currentPaymentStatus)) {
+        await client.query('ROLLBACK');
+        return { success: false, error: `Cannot refund transaction in '${currentPaymentStatus}' state` };
+      }
+
+      // Idempotent refund check: if same refundId was already processed, return success
+      if (refundId) {
+        const existingRefund = await client.query(
+          "SELECT id FROM ledger_events WHERE transaction_id = $1 AND event_type = 'PAYMENT_REFUNDED' AND payload->>'refundId' = $2",
+          [originalTx.id, refundId]
+        );
+        if (existingRefund.rows.length > 0) {
+          await client.query('ROLLBACK');
+          return { success: true, refundId, refundedAmountPaise: refundAmountPaise };
+        }
+      }
+
       const capturedPaise = parseInt(originalTx.captured_paise || originalTx.amount, 10);
       const refundedPaise = parseInt(originalTx.refunded_paise || '0', 10);
       const remainingRefundable = capturedPaise - refundedPaise;
@@ -702,12 +958,39 @@ export class PostgresReserveStore implements IReserveStore {
         [newRefundedTotal, newStatus, originalTx.id]
       );
 
+      // Lock reserve_state and decrement settled
+      await client.query('SELECT * FROM reserve_state WHERE agent_id = $1 FOR UPDATE', [agentId]);
       await client.query(
         'UPDATE reserve_state SET settled_paise = GREATEST(0, settled_paise - $1), updated_at = NOW() WHERE agent_id = $2',
         [refundAmountPaise, agentId]
       );
 
       const refundTxId = refundId || `ref_${Date.now()}`;
+
+      // Append PAYMENT_REFUNDED ledger event
+      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const timestamp = new Date().toISOString();
+      const prevEvtHash = await this.getLastLedgerEventHash(originalTx.agent_id || agentId);
+      const payloadHash = calculatePayloadHash({ refundId: refundTxId, refundAmountPaise, totalRefundedPaise: newRefundedTotal, reason: reason || 'Refund processed' });
+      const seqRes = await client.query(
+        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
+        [originalTx.id]
+      );
+      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
+      const evtHash = calculateLedgerEventHash({
+        id: eventId, transactionId: originalTx.id, eventType: 'PAYMENT_REFUNDED',
+        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      });
+
+      await client.query(`
+        INSERT INTO ledger_events (
+          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
+        ) VALUES ($1, $2, $3, $4, 'PAYMENT_REFUNDED', $5::jsonb, $6, $7, $8, $9, $10, $11)
+      `, [
+        eventId, originalTx.id, originalTx.tenant_id || 'default_tenant', agentId,
+        JSON.stringify({ refundId: refundTxId, refundAmountPaise, totalRefundedPaise: newRefundedTotal, reason: reason || 'Refund processed' }),
+        sequenceNum, prevEvtHash, evtHash, originalTx.policy_id || null, originalTx.policy_version || 1, timestamp
+      ]);
 
       await client.query('COMMIT');
       return { success: true, refundId: refundTxId, refundedAmountPaise: refundAmountPaise };
@@ -854,11 +1137,57 @@ export class PostgresReserveStore implements IReserveStore {
   }
 
   async expireStaleTransactions(agentId = 'default_agent'): Promise<number> {
-    const res = await this.pool.query(
-      "UPDATE transactions SET status = 'expired', payment_status = 'expired', reason = 'Reservation TTL expired' WHERE agent_id = $1 AND (status = 'reserved' OR payment_status = 'reserved') AND expires_at IS NOT NULL AND expires_at < NOW() RETURNING id",
-      [agentId]
-    );
-    return res.rowCount || 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const staleRes = await client.query(
+        "SELECT id, amount FROM transactions WHERE agent_id = $1 AND payment_status IN ('reserved', 'order_creation_unknown') AND expires_at IS NOT NULL AND expires_at < NOW()",
+        [agentId]
+      );
+
+      if (staleRes.rows.length === 0) {
+        await client.query('ROLLBACK');
+        return 0;
+      }
+
+      // Lock reserve_state
+      await client.query('SELECT * FROM reserve_state WHERE agent_id = $1 FOR UPDATE', [agentId]);
+
+      let totalExpiredAmount = 0;
+      for (const row of staleRes.rows) {
+        const amount = parseInt(row.amount, 10);
+        totalExpiredAmount += amount;
+
+        await client.query(
+          "UPDATE transactions SET status = 'expired', payment_status = 'expired', reason = 'Reservation TTL expired' WHERE id = $1",
+          [row.id]
+        );
+
+        // Append RESERVATION_EXPIRED ledger event
+        await this.appendLedgerEvent({
+          transactionId: row.id,
+          tenantId: 'default_tenant',
+          agentId,
+          eventType: 'RESERVATION_EXPIRED',
+          payload: { expiredAmount: amount, reason: 'TTL elapsed' },
+          timestamp: new Date().toISOString(),
+        });
+      }
+
+      await client.query(
+        'UPDATE reserve_state SET held_paise = GREATEST(0, held_paise - $1), updated_at = NOW() WHERE agent_id = $2',
+        [totalExpiredAmount, agentId]
+      );
+
+      await client.query('COMMIT');
+      return staleRes.rows.length;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 }
 

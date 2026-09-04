@@ -50,63 +50,72 @@ export class SqliteReserveStore implements IReserveStore {
   async appendLedgerEvent(
     event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>
   ): Promise<LedgerEvent> {
-    const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-    const timestamp = event.timestamp || new Date().toISOString();
-    const prevHash = await this.getLastLedgerEventHash(event.agentId);
-    
-    let sequenceNum = 1;
-    const seqRow = db
-      .prepare('SELECT MAX(sequenceNum) as maxSeq FROM ledger_events WHERE transactionId = ?')
-      .get(event.transactionId) as { maxSeq: number | null } | undefined;
-    if (seqRow && seqRow.maxSeq !== null) {
-      sequenceNum = seqRow.maxSeq + 1;
-    }
+    // Use IMMEDIATE transaction to serialize ledger appends — prevents concurrent writes
+    // from computing the same prevHash and breaking the chain
+    const append = db.transaction((): LedgerEvent => {
+      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
+      const timestamp = event.timestamp || new Date().toISOString();
 
-    const payloadHash = calculatePayloadHash(event.payload);
-    const hash = calculateLedgerEventHash({
-      id: eventId,
-      transactionId: event.transactionId,
-      eventType: event.eventType,
-      timestamp,
-      payloadHash,
-      sequenceNum,
-      prevHash,
+      // Get global prev hash under lock (the last event for this agent, any transaction)
+      const lastEvt = db
+        .prepare('SELECT hash FROM ledger_events WHERE agentId = ? ORDER BY rowid DESC LIMIT 1')
+        .get(event.agentId || 'default_agent') as { hash: string } | undefined;
+      const prevHash = lastEvt?.hash || GENESIS_PREV_HASH;
+
+      // Global sequence number across all events for this agent
+      const seqRow = db
+        .prepare('SELECT COALESCE(MAX(sequenceNum), 0) + 1 AS nextSeq FROM ledger_events WHERE agentId = ?')
+        .get(event.agentId || 'default_agent') as { nextSeq: number };
+      const sequenceNum = seqRow.nextSeq;
+
+      const payloadHash = calculatePayloadHash(event.payload);
+      const hash = calculateLedgerEventHash({
+        id: eventId,
+        transactionId: event.transactionId,
+        eventType: event.eventType,
+        timestamp,
+        payloadHash,
+        sequenceNum,
+        prevHash,
+      });
+
+      const fullEvent: LedgerEvent = {
+        id: eventId,
+        transactionId: event.transactionId,
+        tenantId: event.tenantId || 'default_tenant',
+        agentId: event.agentId || 'default_agent',
+        eventType: event.eventType,
+        payload: event.payload || {},
+        sequenceNum,
+        prevHash,
+        hash,
+        timestamp,
+        policyId: event.policyId,
+        policyVersion: event.policyVersion,
+      };
+
+      db.prepare(`
+        INSERT INTO ledger_events (id, transactionId, tenantId, agentId, eventType, payload, sequenceNum, prevHash, hash, policyId, policyVersion, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        fullEvent.id,
+        fullEvent.transactionId,
+        fullEvent.tenantId,
+        fullEvent.agentId,
+        fullEvent.eventType,
+        JSON.stringify(fullEvent.payload),
+        fullEvent.sequenceNum,
+        fullEvent.prevHash,
+        fullEvent.hash,
+        fullEvent.policyId ?? null,
+        fullEvent.policyVersion ?? 1,
+        fullEvent.timestamp
+      );
+
+      return fullEvent;
     });
 
-    const fullEvent: LedgerEvent = {
-      id: eventId,
-      transactionId: event.transactionId,
-      tenantId: event.tenantId || 'default_tenant',
-      agentId: event.agentId || 'default_agent',
-      eventType: event.eventType,
-      payload: event.payload || {},
-      sequenceNum,
-      prevHash,
-      hash,
-      timestamp,
-      policyId: event.policyId,
-      policyVersion: event.policyVersion,
-    };
-
-    db.prepare(`
-      INSERT INTO ledger_events (id, transactionId, tenantId, agentId, eventType, payload, sequenceNum, prevHash, hash, policyId, policyVersion, timestamp)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(
-      fullEvent.id,
-      fullEvent.transactionId,
-      fullEvent.tenantId,
-      fullEvent.agentId,
-      fullEvent.eventType,
-      JSON.stringify(fullEvent.payload),
-      fullEvent.sequenceNum,
-      fullEvent.prevHash,
-      fullEvent.hash,
-      fullEvent.policyId ?? null,
-      fullEvent.policyVersion ?? 1,
-      fullEvent.timestamp
-    );
-
-    return fullEvent;
+    return append.immediate();
   }
 
   private appendLedgerEventSync(
@@ -114,8 +123,15 @@ export class SqliteReserveStore implements IReserveStore {
   ): LedgerEvent {
     const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const timestamp = event.timestamp || new Date().toISOString();
-    const prevHash = this.getLastLedgerEventHashSync(event.agentId);
-    const sequenceNum = this.getNextLedgerSequenceSync(event.transactionId);
+
+    // Global prev hash: last event for this agent across all transactions
+    const prevHash = this.getLastLedgerEventHashSync(event.agentId || 'default_agent');
+
+    // Global sequence: per-agent, not per-transaction
+    const seqRow = db
+      .prepare('SELECT COALESCE(MAX(sequenceNum), 0) + 1 AS nextSeq FROM ledger_events WHERE agentId = ?')
+      .get(event.agentId || 'default_agent') as { nextSeq: number };
+    const sequenceNum = seqRow.nextSeq;
 
     const payloadHash = calculatePayloadHash(event.payload);
     const hash = calculateLedgerEventHash({
@@ -196,50 +212,54 @@ export class SqliteReserveStore implements IReserveStore {
     const leaseExpiresAt = new Date(now.getTime() + 30000).toISOString();
     const ownerToken = `owner_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
 
-    const insertInfo = db.prepare(`
-      INSERT INTO idempotency_keys (tenantId, agentId, key, requestHash, status, ownerToken, leaseExpiresAt, createdAt, updatedAt)
-      VALUES (?, ?, ?, ?, 'PROCESSING', ?, ?, ?, ?)
-      ON CONFLICT(tenantId, agentId, key) DO NOTHING
-    `).run(tenantId, agentId, key, requestHash, ownerToken, leaseExpiresAt, nowStr, nowStr);
+    const claimTx = db.transaction(() => {
+      const insertInfo = db.prepare(`
+        INSERT INTO idempotency_keys (tenantId, agentId, key, requestHash, status, ownerToken, leaseExpiresAt, createdAt, updatedAt)
+        VALUES (?, ?, ?, ?, 'PROCESSING', ?, ?, ?, ?)
+        ON CONFLICT(tenantId, agentId, key) DO NOTHING
+      `).run(tenantId, agentId, key, requestHash, ownerToken, leaseExpiresAt, nowStr, nowStr);
 
-    if (insertInfo.changes > 0) {
-      return { status: 'CLAIMED', ownerToken };
-    }
-
-    const existing = db
-      .prepare('SELECT * FROM idempotency_keys WHERE tenantId = ? AND agentId = ? AND key = ?')
-      .get(tenantId, agentId, key) as any;
-
-    if (!existing) {
-      return { status: 'CLAIMED', ownerToken };
-    }
-
-    if (existing.requestHash !== requestHash) {
-      return { status: 'MISMATCH' };
-    }
-
-    if (existing.status === 'COMPLETED' && existing.response) {
-      const cached = typeof existing.response === 'string' ? JSON.parse(existing.response) : existing.response;
-      return { status: 'CACHED', cachedResponse: cached };
-    }
-
-    const isLeaseExpired = existing.leaseExpiresAt
-      ? new Date(existing.leaseExpiresAt).getTime() < now.getTime()
-      : Date.now() - new Date(existing.createdAt).getTime() > 30000;
-
-    if (existing.status === 'FAILED' || isLeaseExpired) {
-      const updateInfo = db.prepare(`
-        UPDATE idempotency_keys
-        SET status = 'PROCESSING', ownerToken = ?, leaseExpiresAt = ?, updatedAt = ?
-        WHERE tenantId = ? AND agentId = ? AND key = ? AND (status = 'FAILED' OR leaseExpiresAt < ? OR leaseExpiresAt IS NULL)
-      `).run(ownerToken, leaseExpiresAt, nowStr, tenantId, agentId, key, nowStr);
-
-      if (updateInfo.changes > 0) {
-        return { status: 'CLAIMED', ownerToken };
+      if (insertInfo.changes > 0) {
+        return { status: 'CLAIMED' as const, ownerToken };
       }
-    }
 
-    return { status: 'PROCESSING' };
+      const existing = db
+        .prepare('SELECT * FROM idempotency_keys WHERE tenantId = ? AND agentId = ? AND key = ?')
+        .get(tenantId, agentId, key) as any;
+
+      if (!existing) {
+        return { status: 'CLAIMED' as const, ownerToken };
+      }
+
+      if (existing.requestHash !== requestHash) {
+        return { status: 'MISMATCH' as const };
+      }
+
+      if (existing.status === 'COMPLETED' && existing.response) {
+        const cached = typeof existing.response === 'string' ? JSON.parse(existing.response) : existing.response;
+        return { status: 'CACHED' as const, cachedResponse: cached };
+      }
+
+      const isLeaseExpired = existing.leaseExpiresAt
+        ? new Date(existing.leaseExpiresAt).getTime() < now.getTime()
+        : Date.now() - new Date(existing.createdAt).getTime() > 30000;
+
+      if (existing.status === 'FAILED' || isLeaseExpired) {
+        const updateInfo = db.prepare(`
+          UPDATE idempotency_keys
+          SET status = 'PROCESSING', ownerToken = ?, leaseExpiresAt = ?, updatedAt = ?
+          WHERE tenantId = ? AND agentId = ? AND key = ? AND (status = 'FAILED' OR leaseExpiresAt < ? OR leaseExpiresAt IS NULL)
+        `).run(ownerToken, leaseExpiresAt, nowStr, tenantId, agentId, key, nowStr);
+
+        if (updateInfo.changes > 0) {
+          return { status: 'CLAIMED' as const, ownerToken };
+        }
+      }
+
+      return { status: 'PROCESSING' as const };
+    });
+
+    return claimTx.immediate();
   }
 
   async completeIdempotencyKey(
@@ -295,6 +315,47 @@ export class SqliteReserveStore implements IReserveStore {
       payload: { razorpayOrderId },
       timestamp: now,
     });
+  }
+
+  async getTransactionByIdOrOrderId(identifier: string, agentId?: string): Promise<Transaction | null> {
+    let query = 'SELECT * FROM transactions WHERE (id = ? OR razorpayOrderId = ? OR razorpayPaymentId = ?)';
+    const params: unknown[] = [identifier, identifier, identifier];
+    if (agentId) {
+      query += ' AND agentId = ?';
+      params.push(agentId);
+    }
+    query += ' LIMIT 1';
+    const row = db.prepare(query).get(...params) as any;
+    if (!row) return null;
+    return {
+      id: row.id,
+      merchant: row.merchant,
+      amount: row.amount,
+      category: row.category,
+      quantity: row.quantity ?? undefined,
+      status: row.status,
+      decisionStatus: row.decisionStatus || undefined,
+      paymentStatus: row.paymentStatus || undefined,
+      decision: row.decisionStatus || undefined,
+      reason: row.reason ?? undefined,
+      timestamp: row.timestamp,
+      mccCode: row.mccCode ?? undefined,
+      productId: row.productId ?? undefined,
+      catalogVersion: row.catalogVersion ?? undefined,
+      hash: row.hash || '',
+      prevHash: row.prevHash || '',
+      razorpayOrderId: row.razorpayOrderId ?? undefined,
+      razorpayPaymentId: row.razorpayPaymentId ?? undefined,
+      agentId: row.agentId ?? undefined,
+      policyId: row.policyId ?? undefined,
+      policyVersion: row.policyVersion ?? undefined,
+      sessionId: row.sessionId ?? undefined,
+      tenantId: row.tenantId ?? undefined,
+      capturedPaise: row.capturedPaise ?? 0,
+      refundedPaise: row.refundedPaise ?? 0,
+      remainingRefundablePaise: Math.max(0, (row.capturedPaise ?? 0) - (row.refundedPaise ?? 0)),
+      expiresAt: row.expiresAt ?? undefined,
+    };
   }
 
   async getActivePolicy(agentId = 'default_agent'): Promise<Policy> {
@@ -760,7 +821,14 @@ export class SqliteReserveStore implements IReserveStore {
       return result;
     });
 
-    return executeAtomic();
+    const result = executeAtomic();
+    
+    // Release Redis budget if guard denied — Redis is ephemeral, not source of truth
+    if (result.decision !== 'allowed' && !purchase.override) {
+      await this.tokenBucket.releaseReserve(agentId, purchase.amount ?? 0);
+    }
+    
+    return result;
   }
 
   private getActivePolicySync(agentId: string): Policy {
@@ -847,6 +915,18 @@ export class SqliteReserveStore implements IReserveStore {
 
     const amount = tx.amount;
     const now = new Date().toISOString();
+    const currentPaymentStatus = tx.paymentStatus;
+
+    // Idempotent: already captured
+    if (currentPaymentStatus === 'captured' || currentPaymentStatus === 'partially_refunded' || currentPaymentStatus === 'refunded') {
+      return { success: true, transactionId: tx.id };
+    }
+
+    // Validate state transition
+    const captureableStatuses = ['reserved', 'order_creation_unknown', 'order_created', 'authorized'];
+    if (!captureableStatuses.includes(currentPaymentStatus)) {
+      return { success: false, error: `Invalid state transition: cannot capture from '${currentPaymentStatus}'` };
+    }
 
     db.prepare(`
       UPDATE transactions
@@ -879,14 +959,71 @@ export class SqliteReserveStore implements IReserveStore {
     return { success: true, transactionId: tx.id, transaction: updatedRow };
   }
 
+  async authorizeTransaction(
+    txIdOrOrderId: string,
+    razorpayPaymentId?: string,
+    agentId = 'default_agent'
+  ): Promise<{ success: boolean; error?: string }> {
+    const authorizeTx = db.transaction(() => {
+      const row = db.prepare(
+        'SELECT * FROM transactions WHERE (id = ? OR razorpayOrderId = ?) AND agentId = ?'
+      ).get(txIdOrOrderId, txIdOrOrderId, agentId) as any;
+
+      if (!row) return { success: false, error: 'Transaction not found' };
+
+      const currentStatus = row.paymentStatus;
+      if (['authorized', 'captured', 'partially_refunded', 'refunded'].includes(currentStatus)) {
+        return { success: true }; // Idempotent
+      }
+
+      const authorizableStatuses = ['reserved', 'order_creation_unknown', 'order_created'];
+      if (!authorizableStatuses.includes(currentStatus)) {
+        return { success: false, error: `Invalid state transition: cannot authorize from '${currentStatus}'` };
+      }
+
+      db.prepare(`
+        UPDATE transactions
+        SET status = 'authorized', paymentStatus = 'authorized',
+            razorpayPaymentId = COALESCE(?, razorpayPaymentId)
+        WHERE id = ?
+      `).run(razorpayPaymentId ?? null, row.id);
+
+      // Append ledger event — funds remain in heldPaise
+      this.appendLedgerEventSync({
+        transactionId: row.id,
+        tenantId: row.tenantId || 'default_tenant',
+        agentId,
+        eventType: 'ORDER_ATTACHED',
+        payload: { razorpayPaymentId, razorpayOrderId: row.razorpayOrderId, status: 'authorized' },
+        timestamp: new Date().toISOString(),
+      });
+
+      return { success: true };
+    });
+
+    return authorizeTx();
+  }
+
   async releaseReservation(txIdOrOrderId: string, reason = 'Reservation released/expired', agentId = 'default_agent'): Promise<ReleaseResult> {
     const tx = db.prepare("SELECT * FROM transactions WHERE (id = ? OR razorpayOrderId = ?) AND (agentId = ?)").get(txIdOrOrderId, txIdOrOrderId, agentId) as any;
     if (!tx) return { success: false, error: 'Transaction not found' };
 
     const amount = tx.amount;
     const now = new Date().toISOString();
+    const currentPaymentStatus = tx.paymentStatus;
 
-    if (tx.status === 'reserved' || tx.paymentStatus === 'reserved' || tx.paymentStatus === 'order_creation_unknown' || tx.paymentStatus === 'order_created') {
+    // Idempotent: already released or expired
+    if (currentPaymentStatus === 'released' || currentPaymentStatus === 'expired') {
+      return { success: true, transactionId: tx.id, releasedAmountPaise: 0 };
+    }
+
+    // Only release from held states
+    const releaseableStatuses = ['reserved', 'order_creation_unknown', 'order_created'];
+    if (!releaseableStatuses.includes(currentPaymentStatus)) {
+      return { success: false, error: `Invalid state transition: cannot release from '${currentPaymentStatus}'` };
+    }
+
+    if (currentPaymentStatus === 'reserved' || currentPaymentStatus === 'order_creation_unknown' || currentPaymentStatus === 'order_created') {
       db.prepare(`
         UPDATE transactions
         SET status = 'released', paymentStatus = 'released', decisionStatus = 'allowed', reason = ?
@@ -894,6 +1031,9 @@ export class SqliteReserveStore implements IReserveStore {
       `).run(reason, tx.id);
 
       db.prepare("UPDATE reserve_state SET heldPaise = MAX(0, heldPaise - ?) WHERE agentId = ?").run(amount, agentId);
+
+      // Release the token bucket budget so freed funds can be used by future requests
+      await this.tokenBucket.releaseReserve(agentId, amount);
 
       await this.appendLedgerEvent({
         transactionId: tx.id,
@@ -932,6 +1072,23 @@ export class SqliteReserveStore implements IReserveStore {
   async processRefund(orderIdOrPaymentId: string, refundAmountPaise: number, refundId?: string, reason?: string, agentId = 'default_agent'): Promise<RefundResult> {
     const tx = db.prepare("SELECT * FROM transactions WHERE (razorpayOrderId = ? OR razorpayPaymentId = ? OR id = ?) AND (agentId = ?)").get(orderIdOrPaymentId, orderIdOrPaymentId, orderIdOrPaymentId, agentId) as any;
     if (!tx) return { success: false, error: 'Target transaction for refund not found' };
+
+    const currentPaymentStatus = tx.paymentStatus;
+
+    // Only captured/partially_refunded transactions can be refunded
+    if (!['captured', 'partially_refunded'].includes(currentPaymentStatus)) {
+      return { success: false, error: `Cannot refund transaction in '${currentPaymentStatus}' state` };
+    }
+
+    // Idempotent refund check
+    if (refundId) {
+      const existingRefund = db.prepare(
+        "SELECT id FROM ledger_events WHERE transactionId = ? AND eventType = 'PAYMENT_REFUNDED' AND json_extract(payload, '$.refundId') = ?"
+      ).get(tx.id, refundId) as any;
+      if (existingRefund) {
+        return { success: true, refundId, refundedAmountPaise: refundAmountPaise };
+      }
+    }
 
     const capturedPaise = tx.capturedPaise || tx.amount || 0;
     const currentRefundedPaise = tx.refundedPaise || 0;

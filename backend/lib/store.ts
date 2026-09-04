@@ -230,3 +230,11 @@ export async function expireStaleTransactions(agentId = 'default_agent'): Promis
   return 0;
 }
 
+export async function getTransactionByIdOrOrderId(identifier: string, agentId?: string): Promise<import('./types').Transaction | null> {
+  const store = getStore();
+  if (store.getTransactionByIdOrOrderId) {
+    return await store.getTransactionByIdOrOrderId(identifier, agentId);
+  }
+  return null;
+}
+

@@ -89,7 +89,7 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
             transactionId: tx.id,
             tenantId: 'default_tenant',
             agentId: tx.agentId || 'default_agent',
-            eventType: 'ORDER_RECONCILED',
+            eventType: 'ORDER_RECONCILED_FOUND',
             payload: {
               reconciliationAction: 'ORDER_MATCHED',
               razorpayOrderId: matchedOrder.id,

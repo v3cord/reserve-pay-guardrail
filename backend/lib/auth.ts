@@ -182,11 +182,12 @@ export function getClientIp(request: Request): string {
   );
 }
 
-export function createDemoSessionToken(agentId = 'default_agent', role: AuthRole = 'admin'): string {
+export function createDemoSessionToken(agentId = 'default_agent', role: AuthRole = 'demo_user'): string {
   return generateJwt({
     sub: 'demo_user',
-    role,
+    role: 'demo_user',
     agentId,
+    tenantId: 'demo_tenant',
   }, 1800);
 }
 
@@ -254,6 +255,7 @@ export async function authenticateRequest(
       role: payload.role as AuthRole,
       identity: payload.sub as string,
       agentId: payload.agentId as string | undefined,
+      tenantId: payload.tenantId as string | undefined,
       authMethod: 'jwt',
     };
   } else if (sessionCookie) {
@@ -263,6 +265,7 @@ export async function authenticateRequest(
         role: payload.role as AuthRole,
         identity: payload.sub as string,
         agentId: payload.agentId as string | undefined,
+        tenantId: payload.tenantId as string | undefined,
         authMethod: 'demo_session',
       };
     }

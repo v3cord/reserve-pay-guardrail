@@ -33,9 +33,42 @@ export async function POST(request: Request) {
     }
 
     const body: PurchaseRequestBody = JSON.parse(rawBody || '{}');
-    const tenantId = body.tenantId || auth.context.tenantId || 'default_tenant';
-    const agentId = body.agentId || auth.context.agentId || 'default_agent';
+    // SECURITY: Always derive identity from server-side auth context, never from body
+    const tenantId = auth.context.tenantId || 'default_tenant';
+    const agentId = auth.context.agentId || 'default_agent';
     const ip = getClientIp(request);
+    const role = auth.context.role;
+
+    // Audit log if client attempted identity spoofing
+    if (body.tenantId && body.tenantId !== tenantId || body.agentId && body.agentId !== agentId) {
+      await recordSecurityAudit({
+        eventType: 'FORBIDDEN_PRIVILEGE_ESCALATION',
+        role: auth.context.role,
+        identity: auth.context.identity,
+        endpoint: '/api/purchase',
+        method: 'POST',
+        details: `Client attempted identity override: body.tenantId=${body.tenantId || 'none'}, body.agentId=${body.agentId || 'none'} (server: tenant=${tenantId}, agent=${agentId})`,
+        ip,
+      });
+    }
+
+    // Phase 1: Agent-role purchases MUST use productId + quantity + idempotencyKey
+    const isAgentRole = role === 'agent' || role === 'AGENT_ROLE';
+    if (isAgentRole) {
+      if (!body.productId) {
+        return NextResponse.json(
+          { error: 'Agent-role purchases require productId. Raw merchant/amount fields are not accepted from agent role. Use GET /api/catalog-search to find valid productIds.' },
+          { status: 400 }
+        );
+      }
+      const ikey = (request.headers.get('x-idempotency-key') || body.idempotencyKey || '').trim();
+      if (!ikey) {
+        return NextResponse.json(
+          { error: 'Agent-role purchases require an idempotencyKey to prevent double-charging.' },
+          { status: 400 }
+        );
+      }
+    }
 
     // 1. Authoritative Catalog Lookup
     let resolvedMerchant = body.merchant;
@@ -90,6 +123,13 @@ export async function POST(request: Request) {
           { status: 409 }
         );
       }
+      if (claim.status === 'PROCESSING') {
+        // Another worker is currently processing this key — do NOT enter financial execution
+        return NextResponse.json(
+          { error: '409 Conflict: Request with this idempotency key is currently being processed. Retry after a short delay.' },
+          { status: 409, headers: { 'Retry-After': '2' } }
+        );
+      }
     }
 
     // 3. Deterministic Local Reservation Engine
@@ -117,6 +157,7 @@ export async function POST(request: Request) {
           ruleViolated: purchaseResult.ruleViolated,
           limitPaise: purchaseResult.limitPaise,
           requestedPaise: purchaseResult.requestedPaise,
+          policyExplanation: purchaseResult.policyExplanation,
           updatedReserveState: purchaseResult.updatedReserveState,
         },
         { status: 403 }
@@ -130,6 +171,7 @@ export async function POST(request: Request) {
         paymentStatus: 'requested',
         reason: purchaseResult.reason,
         ruleViolated: purchaseResult.ruleViolated,
+        policyExplanation: purchaseResult.policyExplanation,
         transaction: purchaseResult.transaction,
         updatedReserveState: purchaseResult.updatedReserveState,
       };
@@ -216,6 +258,7 @@ export async function POST(request: Request) {
       razorpayOrderId,
       amount: resolvedAmount,
       currency: 'INR',
+      policyExplanation: purchaseResult.policyExplanation,
       transaction: {
         ...purchaseResult.transaction,
         razorpayOrderId,

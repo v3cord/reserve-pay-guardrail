@@ -23,11 +23,11 @@ export interface PurchaseRequest {
 }
 
 export interface PurchaseResponse {
-  decision: 'approve' | 'freeze';
+  decision: 'allowed' | 'review' | 'denied';
   reason: string;
   razorpayOrderId?: string;
   transactionId?: string;
-  status: 'APPROVED' | 'FROZEN';
+  status: 'APPROVED' | 'FROZEN' | 'REVIEW';
   remainingBudgetRupees?: string;
   updatedReserveState?: {
     totalPaise: number;
@@ -135,14 +135,14 @@ export class ReserveGuardClient {
     });
 
     const data = await res.json();
-    const isApproved = data.decision === 'approve';
+    const isApproved = data.decision === 'allowed';
 
     return {
       decision: data.decision,
       reason: data.reason,
       razorpayOrderId: data.razorpayOrderId,
       transactionId: data.transaction?.id,
-      status: isApproved ? 'APPROVED' : 'FROZEN',
+      status: isApproved ? 'APPROVED' : data.decision === 'review' ? 'REVIEW' : 'FROZEN',
       remainingBudgetRupees: data.updatedReserveState?.availablePaise !== undefined
         ? (data.updatedReserveState.availablePaise / 100).toFixed(2)
         : undefined,

@@ -3,15 +3,14 @@ import { createDemoSessionToken, authenticateRequest } from '../../../lib/auth';
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const agentId = body.agentId || 'default_agent';
-    const token = createDemoSessionToken(agentId, 'admin');
+    const token = createDemoSessionToken('default_agent', 'demo_user');
 
     const res = NextResponse.json({
       success: true,
-      role: 'admin',
+      role: 'demo_user',
       identity: 'demo_user',
-      agentId,
+      agentId: 'default_agent',
+      tenantId: 'demo_tenant',
       expiresIn: 1800,
     });
 

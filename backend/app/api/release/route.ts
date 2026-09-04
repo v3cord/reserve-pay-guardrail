@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     }
 
     const body = JSON.parse(rawBody || '{}');
-    const { txId, orderId, reason, agentId } = body;
+    const { txId, orderId, reason } = body;
     const identifier = txId || orderId;
 
     if (!identifier) {
@@ -28,7 +28,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const targetAgentId = agentId || auth.context?.agentId || 'default_agent';
+    const targetAgentId = auth.context?.agentId || 'default_agent';
     const result = await releaseReservation(identifier, reason || 'Checkout modal dismissed / payment abandoned', targetAgentId);
 
     return NextResponse.json({
