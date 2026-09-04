@@ -103,7 +103,7 @@ Reserve Pay uses an **Atomic Local Reservation + Compensating Payment Workflow**
 - Node.js 18.0.0 or higher
 - npm 9.0.0 or higher
 - Optional: PostgreSQL/Supabase for production storage (SQLite used by default)
-- Optional: Redis or Upstash for distributed token bucket (falls back to in-memory)
+- Optional: Vercel KV (Upstash) or a plain Redis instance for the distributed token bucket — falls back to in-memory if not configured
 
 ### Environment Setup
 
@@ -189,7 +189,8 @@ The repository includes an MCP server (`backend/mcp-server/`) exposing tools for
 | Webhook HMAC-SHA256 verification | ✅ Real |
 | Ledger SHA-256 hash chain | ✅ Real |
 | Concurrency safety | ✅ Verified via test suite |
-| Token bucket (no Redis configured) | ⚠️ In-memory fallback |
+| Token bucket (Vercel KV / Upstash / REDIS_URL set) | ✅ Distributed atomic Lua acquire |
+| Token bucket (no Redis env vars set) | ⚠️ In-memory fallback |
 
 ---
 

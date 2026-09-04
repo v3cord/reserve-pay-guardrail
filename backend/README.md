@@ -70,7 +70,7 @@ Append-only ledger records every transition.
 
 **AI never authorizes money.** The AI extracts a spending policy (ceiling, category, merchants). A deterministic rule engine makes every allow/deny decision with no AI involvement. Extracted policies are clamped: `amountCeiling ≤ ₹1,00,000`, `sessionCap ≤ ₹10,00,000`.
 
-**Concurrency-safe fund reservation.** SQLite uses `BEGIN IMMEDIATE` transactions. PostgreSQL uses `SERIALIZABLE` isolation with `SELECT ... FOR UPDATE`. An in-memory token bucket (or Redis/Upstash if configured) provides an additional ephemeral coordination layer. Zero overspend is enforced at the database level.
+**Concurrency-safe fund reservation.** SQLite uses `BEGIN IMMEDIATE` transactions. PostgreSQL uses `SERIALIZABLE` isolation with `SELECT ... FOR UPDATE`. A distributed atomic token bucket (Vercel KV / Upstash via Lua eval, or ioredis TCP Redis via Lua eval, falling back to in-memory) provides an additional ephemeral coordination layer. Zero overspend is enforced at the database level.
 
 **Tamper-evident append-only audit ledger.** Every state transition is recorded as a ledger event with:
 ```
@@ -88,7 +88,7 @@ The global per-agent sequence and previous-hash are computed under the same lock
 
 - Node.js 18+ and npm 9+
 - Optional: PostgreSQL/Supabase for production storage (SQLite used by default)
-- Optional: Redis or Upstash for distributed token bucket (falls back to in-memory)
+- Optional: Vercel KV (Upstash) or a plain Redis instance for the distributed token bucket — falls back to in-memory if not configured
 
 ### Setup
 
@@ -115,8 +115,9 @@ See `.env.example` for all required and optional variables. Key variables:
 | `DATABASE_URL` | PostgreSQL connection string (omit for SQLite) |
 | `ADMIN_API_KEY` / `AGENT_API_KEY` | API authentication keys |
 | `JWT_SECRET` | Session JWT signing secret (min 32 chars) |
-| `REDIS_URL` | ioredis TCP Redis for distributed token bucket |
-| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Upstash/Vercel KV for serverless token bucket |
+| `KV_REST_API_URL` / `KV_REST_API_TOKEN` | Vercel KV (Upstash) — injected automatically by Vercel when you add a KV store |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Direct Upstash REST env var names (alternative to KV_*) |
+| `REDIS_URL` | Plain TCP Redis via ioredis (local dev / self-hosted) |
 
 The system runs fully in mock mode without real Razorpay or Gemini credentials — mock mode is clearly labeled in the UI.
 
@@ -204,7 +205,8 @@ Tools exposed:
 | Webhook HMAC-SHA256 verification | ✅ Real |
 | Ledger SHA-256 hash chain | ✅ Real |
 | Concurrency safety | ✅ Verified via tests |
-| Token bucket (no Redis configured) | ⚠️ In-memory fallback |
+| Token bucket (Vercel KV / Upstash / REDIS_URL set) | ✅ Distributed atomic Lua acquire |
+| Token bucket (no Redis env vars set) | ⚠️ In-memory fallback |
 
 ---
 
