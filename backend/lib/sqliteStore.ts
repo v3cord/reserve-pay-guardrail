@@ -1134,11 +1134,12 @@ export class SqliteReserveStore implements IReserveStore {
     return { success: true, refundId: refundTxId, refundedAmountPaise: refundAmountPaise };
   }
 
-  async disputeTransaction(orderIdOrPaymentId: string, disputeReason?: string, agentId = 'default_agent'): Promise<DisputeResult> {
+  async disputeTransaction(orderIdOrPaymentId: string, disputeReason?: string, disputeId?: string | null, agentId = 'default_agent'): Promise<DisputeResult> {
     const tx = db.prepare("SELECT * FROM transactions WHERE (razorpayOrderId = ? OR razorpayPaymentId = ? OR id = ?) AND (agentId = ?)").get(orderIdOrPaymentId, orderIdOrPaymentId, orderIdOrPaymentId, agentId) as any;
     if (!tx) return { success: false, error: 'Transaction not found for dispute' };
 
     const now = new Date().toISOString();
+    const previousStatus = tx.paymentStatus as string;
     db.prepare("UPDATE transactions SET status = 'disputed', paymentStatus = 'disputed', reason = ? WHERE id = ?").run(disputeReason || 'Payment dispute filed', tx.id);
     db.prepare("UPDATE policies SET category = 'FROZEN_DUE_TO_DISPUTE' WHERE agentId = ?").run(agentId);
 
@@ -1146,8 +1147,12 @@ export class SqliteReserveStore implements IReserveStore {
       transactionId: tx.id,
       tenantId: tx.tenantId || 'default_tenant',
       agentId,
-      eventType: 'TRANSACTION_DISPUTED',
-      payload: { disputeReason },
+      eventType: 'PAYMENT_DISPUTED',
+      payload: {
+        reason: disputeReason || 'Payment dispute filed',
+        disputeId: disputeId || null,
+        previousStatus,
+      },
       timestamp: now,
     });
 

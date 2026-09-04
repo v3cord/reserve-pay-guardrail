@@ -340,7 +340,7 @@ export interface IReserveStore {
   releaseReservation(txIdOrOrderId: string, reason?: string, agentId?: string): Promise<ReleaseResult>;
   getTransactionByIdOrOrderId(identifier: string, agentId?: string): Promise<Transaction | null> | Transaction | null;
   processRefund(orderIdOrPaymentId: string, refundAmountPaise: number, refundId?: string, reason?: string, agentId?: string): Promise<RefundResult> | RefundResult;
-  disputeTransaction(orderIdOrPaymentId: string, disputeReason?: string, agentId?: string): Promise<DisputeResult> | DisputeResult;
+  disputeTransaction(orderIdOrPaymentId: string, disputeReason?: string, disputeId?: string | null, agentId?: string): Promise<DisputeResult> | DisputeResult;
   verifyLedgerIntegrity(agentId?: string): Promise<LedgerIntegrityResult> | LedgerIntegrityResult;
   resetStore(agentId?: string): Promise<void> | void;
   recordSecurityAudit(event: SecurityAuditEvent): Promise<SecurityAuditEvent> | SecurityAuditEvent;

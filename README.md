@@ -20,7 +20,7 @@ When autonomous AI agents make real-world purchases (e.g. food delivery, cloud r
 - **Unverified Merchant & Category Violations**: Agents ordering from malicious, risky, or out-of-scope merchants.
 - **Untracked Ledger Drift**: Lack of non-repudiable audit trails showing *why* money moved.
 
-**Reserve Pay Guardrail** is a production-style financial policy engine that sits between **Agent Intent** and **Money Movement**:
+**Reserve Pay Guardrail** is a production-oriented prototype financial policy engine that sits between **Agent Intent** and **Money Movement**:
 
 ```
 [ Natural Language Intent ] -> ( Gemini Policy Synthesis ) -> [ Guardrail Policy ]
@@ -55,16 +55,19 @@ When autonomous AI agents make real-world purchases (e.g. food delivery, cloud r
 
 ---
 
-## Verified Benchmark Scorecard
+## Benchmark Scorecard
 
-| Invariant / Benchmark | Verification Method | Result | Status |
+> All benchmarks were run in a local test environment against a live PostgreSQL + Redis instance.
+> Reproduce any result with the commands shown below.
+
+| Invariant / Benchmark | How to Reproduce | Result | Status |
 | :--- | :--- | :--- | :--- |
-| **Zero-Overspend Under Concurrency** | 1,000 simultaneous purchase requests against bounded reserve | **₹0.00 Overspend** (4/4 allowed, 996 rejected) | ✅ **VERIFIED** |
-| **Adversarial Prompt Injection Defense** | N=100 multi-layer adversarial injection & jailbreak corpus | **100.0% Neutralized** (0 financial hallucinations) | ✅ **VERIFIED** |
-| **Tamper-Evident Ledger Integrity** | SHA-256 cryptographic sequence & `prevHash` verification | **100% Chain Integrity Verified** | ✅ **VERIFIED** |
-| **Durable Idempotency** | Scoped `(tenant, agent, key)` deduplication under replay | **100% Deduplicated** (0 double charges) | ✅ **VERIFIED** |
-| **Network Timeout Reconciliation** | Simulated 3-outcome gateway failure + background reconciliation | **100% State Compensation & Auto-Release** | ✅ **VERIFIED** |
-| **Client-Side Credential Scanning** | CI secret scan of frontend bundle | **0 Exposed Admin Keys** (HttpOnly JWT auth) | ✅ **VERIFIED** |
+| **Zero-Overspend Under Concurrency** | `npx tsx tests/benchmark-concurrency.ts` | **₹0.00 Overspend** (4/4 allowed, 996 rejected) | 🧪 **BENCHMARKED IN LOCAL TEST ENVIRONMENT** |
+| **Adversarial Prompt Injection Defense** | `npx tsx tests/benchmark-intent.ts` | **100.0% Neutralized** (0 financial hallucinations) | 🧪 **BENCHMARKED IN LOCAL TEST ENVIRONMENT** |
+| **Tamper-Evident Ledger Integrity** | `npm test -- --reporter=verbose` (store.test.ts) | **100% Chain Integrity Verified** | 🧪 **BENCHMARKED IN LOCAL TEST ENVIRONMENT** |
+| **Durable Idempotency** | `npm test -- --reporter=verbose` (store.test.ts) | **100% Deduplicated** (0 double charges) | 🧪 **BENCHMARKED IN LOCAL TEST ENVIRONMENT** |
+| **Network Timeout Reconciliation** | `npm test -- --reporter=verbose` (webhook.test.ts) | **100% State Compensation & Auto-Release** | 🧪 **BENCHMARKED IN LOCAL TEST ENVIRONMENT** |
+| **Client-Side Credential Scanning** | `bash scripts/ci-gate.sh` | **0 Exposed Admin Keys** (HttpOnly JWT auth) | 🧪 **BENCHMARKED IN LOCAL TEST ENVIRONMENT** |
 
 ---
 

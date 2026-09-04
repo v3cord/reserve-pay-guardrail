@@ -121,9 +121,10 @@ export async function processRefund(
 export async function disputeTransaction(
   orderIdOrPaymentId: string,
   disputeReason?: string,
+  disputeId?: string | null,
   agentId = 'default_agent'
 ): Promise<DisputeResult> {
-  const res = await getStore().disputeTransaction(orderIdOrPaymentId, disputeReason, agentId);
+  const res = await getStore().disputeTransaction(orderIdOrPaymentId, disputeReason, disputeId, agentId);
   await publishUpdate();
   return res;
 }

@@ -235,7 +235,7 @@ export async function POST(request: Request) {
       }
     } else if (event === 'payment.dispute.created' || event === 'payment.dispute.won' || event === 'payment.dispute.lost') {
       const disputeReason = `Payment dispute event: ${event} (Dispute ID: ${disputeEntity?.id || 'N/A'})`;
-      await disputeTransaction(identifier, disputeReason, matchedTx?.agentId);
+      await disputeTransaction(identifier, disputeReason, disputeEntity?.id || null, matchedTx?.agentId);
     }
 
     return NextResponse.json({ status: 'ok', event, eventId }, { status: 200 });

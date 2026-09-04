@@ -1,5 +1,5 @@
 import { getPgPool } from './db';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import {
   Policy, ReserveState, Transaction, AttemptedPurchase, GuardCheckResult,
   SecurityAuditEvent, IReserveStore, ReserveStoreType,
@@ -36,55 +36,80 @@ export class PostgresReserveStore implements IReserveStore {
     return res.rows.length > 0 && res.rows[0].hash ? res.rows[0].hash : GENESIS_PREV_HASH;
   }
 
-  async appendLedgerEvent(
+  /**
+   * appendLedgerEventTx — the single transactional ledger-append primitive.
+   *
+   * MUST be called inside an existing transaction owned by the caller.
+   * Does NOT issue BEGIN / COMMIT — the caller owns the transaction boundary.
+   *
+   * It:
+   *   1. Locks the agent's current ledger head with SELECT … FOR UPDATE
+   *      (serialises concurrent appends on this agent without a separate lock row)
+   *   2. Derives the global next sequence number via MAX(sequence_num) + 1
+   *   3. Computes prevHash and the new cryptographic hash
+   *   4. Inserts the event — all via the SAME PoolClient
+   *
+   * Because every caller already holds a row-level lock on reserve_state (or
+   * transactions) before reaching this point, and because FOR UPDATE on the
+   * ledger head is taken inside the same serialisable/repeatable-read
+   * transaction, two concurrent writers can never compute the same prevHash.
+   */
+  private async appendLedgerEventTx(
+    client: PoolClient,
     event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>
   ): Promise<LedgerEvent> {
     const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
     const timestamp = event.timestamp || new Date().toISOString();
+    const agentId = event.agentId || 'default_agent';
 
-    const client = await this.pool.connect();
-    try {
-      // Use SERIALIZABLE isolation to serialize all ledger appends for this agent.
-      // This prevents two concurrent writers from computing the same prevHash.
-      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
-
-      // Global prev hash: last event for this agent (not per-transaction)
-      const prevHashRes = await client.query(
-        'SELECT hash FROM ledger_events WHERE agent_id = $1 ORDER BY sequence_num DESC LIMIT 1 FOR UPDATE',
-        [event.agentId || 'default_agent']
-      );
-      const prevHash = prevHashRes.rows.length > 0 && prevHashRes.rows[0].hash
+    // 1. Lock the agent's latest ledger event to serialise concurrent appends.
+    //    FOR UPDATE on a non-existent row is a no-op; the MAX below handles the
+    //    empty-chain case via COALESCE.
+    const prevHashRes = await client.query(
+      `SELECT hash FROM ledger_events
+       WHERE agent_id = $1
+       ORDER BY sequence_num DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [agentId]
+    );
+    const prevHash =
+      prevHashRes.rows.length > 0 && prevHashRes.rows[0].hash
         ? prevHashRes.rows[0].hash
         : GENESIS_PREV_HASH;
 
-      // Global sequence: per-agent across all transactions
-      const seqRes = await client.query(
-        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE agent_id = $1',
-        [event.agentId || 'default_agent']
-      );
-      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
+    // 2. Global per-agent sequence number (not per-transaction).
+    const seqRes = await client.query(
+      `SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq
+       FROM ledger_events
+       WHERE agent_id = $1`,
+      [agentId]
+    );
+    const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
 
-      const payloadHash = calculatePayloadHash(event.payload);
-      const hash = calculateLedgerEventHash({
-        id: eventId,
-        transactionId: event.transactionId,
-        eventType: event.eventType,
-        timestamp,
-        payloadHash,
-        sequenceNum,
-        prevHash,
-      });
+    // 3. Cryptographic hash.
+    const payloadHash = calculatePayloadHash(event.payload);
+    const hash = calculateLedgerEventHash({
+      id: eventId,
+      transactionId: event.transactionId,
+      eventType: event.eventType,
+      timestamp,
+      payloadHash,
+      sequenceNum,
+      prevHash,
+    });
 
-      await client.query(`
-        INSERT INTO ledger_events (
-          id, transaction_id, tenant_id, agent_id, event_type, payload,
-          sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
-        ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)
-      `, [
+    // 4. Insert via the caller's client (still inside the caller's transaction).
+    await client.query(
+      `INSERT INTO ledger_events (
+         id, transaction_id, tenant_id, agent_id, event_type, payload,
+         sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
+       ) VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12)`,
+      [
         eventId,
         event.transactionId,
         event.tenantId || 'default_tenant',
-        event.agentId || 'default_agent',
+        agentId,
         event.eventType,
         JSON.stringify(event.payload || {}),
         sequenceNum,
@@ -93,24 +118,40 @@ export class PostgresReserveStore implements IReserveStore {
         event.policyId || null,
         event.policyVersion || 1,
         timestamp,
-      ]);
+      ]
+    );
 
+    return {
+      id: eventId,
+      transactionId: event.transactionId,
+      tenantId: event.tenantId || 'default_tenant',
+      agentId,
+      eventType: event.eventType,
+      payload: event.payload || {},
+      sequenceNum,
+      prevHash,
+      hash,
+      timestamp,
+      policyId: event.policyId,
+      policyVersion: event.policyVersion,
+    };
+  }
+
+  /**
+   * appendLedgerEvent — public standalone variant.
+   * Opens its own SERIALIZABLE transaction, delegates to appendLedgerEventTx,
+   * then commits. Use this when there is no surrounding transaction (e.g.
+   * flagOrderCreationUnknown, attachRazorpayOrder).
+   */
+  async appendLedgerEvent(
+    event: Omit<LedgerEvent, 'id' | 'sequenceNum' | 'prevHash' | 'hash'>
+  ): Promise<LedgerEvent> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+      const result = await this.appendLedgerEventTx(client, event);
       await client.query('COMMIT');
-
-      return {
-        id: eventId,
-        transactionId: event.transactionId,
-        tenantId: event.tenantId || 'default_tenant',
-        agentId: event.agentId || 'default_agent',
-        eventType: event.eventType,
-        payload: event.payload || {},
-        sequenceNum,
-        prevHash,
-        hash,
-        timestamp,
-        policyId: event.policyId,
-        policyVersion: event.policyVersion,
-      };
+      return result;
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -155,7 +196,6 @@ export class PostgresReserveStore implements IReserveStore {
       INSERT INTO idempotency_keys (tenant_id, agent_id, key, request_hash, status, owner_token, lease_expires_at, created_at, updated_at)
       VALUES ($1, $2, $3, $4, 'PROCESSING', $5, NOW() + INTERVAL '${leaseSeconds} seconds', NOW(), NOW())
       ON CONFLICT (tenant_id, agent_id, key) DO UPDATE SET
-        -- Only reclaim if FAILED or lease expired; otherwise leave unchanged
         status = CASE
           WHEN idempotency_keys.status = 'FAILED' OR idempotency_keys.lease_expires_at < NOW() OR idempotency_keys.lease_expires_at IS NULL
           THEN 'PROCESSING'
@@ -177,32 +217,26 @@ export class PostgresReserveStore implements IReserveStore {
 
     const row = result.rows[0];
     if (!row) {
-      // Should never happen with INSERT...ON CONFLICT...RETURNING, but handle defensively
       return { status: 'CLAIMED', ownerToken };
     }
 
-    // Fresh insert — we own the claim
     if (row.was_inserted) {
       return { status: 'CLAIMED', ownerToken };
     }
 
-    // Existing row — check hash match first
     if (row.request_hash !== requestHash) {
       return { status: 'MISMATCH' };
     }
 
-    // Completed with cached response
     if (row.status === 'COMPLETED' && row.response) {
       const cached = typeof row.response === 'string' ? JSON.parse(row.response) : row.response;
       return { status: 'CACHED', cachedResponse: cached };
     }
 
-    // We reclaimed a FAILED/expired lease
     if (row.owner_token === ownerToken) {
       return { status: 'CLAIMED', ownerToken };
     }
 
-    // Another worker is currently processing
     return { status: 'PROCESSING' };
   }
 
@@ -270,8 +304,8 @@ export class PostgresReserveStore implements IReserveStore {
       };
     }
     const row = res.rows[0];
-    const allowedMerchants = typeof row.allowed_merchants === 'string' 
-      ? JSON.parse(row.allowed_merchants) 
+    const allowedMerchants = typeof row.allowed_merchants === 'string'
+      ? JSON.parse(row.allowed_merchants)
       : (row.allowed_merchants || ['Amazon', 'BestBuy']);
 
     const allowedMccCodes = row.allowed_mcc_codes
@@ -516,7 +550,7 @@ export class PostgresReserveStore implements IReserveStore {
       const activePolicy = await this.getActivePolicy(agentId);
       const currentState = await this.getReserveState(agentId, purchase.sessionId);
 
-      // Authoritative session spend calculation via SQL aggregate under lock (NO LIMIT 100 bug)
+      // Authoritative session spend via SQL aggregate under lock
       const activeSessionId = purchase.sessionId || activePolicy.sessionId || 'default_session';
       const sessionAggRes = await client.query(`
         SELECT COALESCE(SUM(amount), 0) AS total
@@ -550,32 +584,20 @@ export class PostgresReserveStore implements IReserveStore {
           [tx.amount, agentId]
         );
 
-        // Append ledger event
-        const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-        const prevEvtHash = await this.getLastLedgerEventHash(agentId);
-        const payloadHash = calculatePayloadHash({ amount: tx.amount, merchant: tx.merchant, productId: tx.productId });
-        const evtHash = calculateLedgerEventHash({
-          id: eventId,
+        // Append RESERVATION_CREATED via the transactional helper — same client, same tx
+        await this.appendLedgerEventTx(client, {
           transactionId: tx.id,
+          tenantId: tx.tenantId || 'default_tenant',
+          agentId,
           eventType: 'RESERVATION_CREATED',
+          payload: { amount: tx.amount, merchant: tx.merchant, productId: tx.productId },
           timestamp: tx.timestamp,
-          payloadHash,
-          sequenceNum: 1,
-          prevHash: prevEvtHash,
+          policyId: tx.policyId,
+          policyVersion: tx.policyVersion,
         });
-
-        await client.query(`
-          INSERT INTO ledger_events (
-            id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
-          ) VALUES ($1, $2, $3, $4, 'RESERVATION_CREATED', $5::jsonb, 1, $6, $7, $8, $9, $10)
-        `, [
-          eventId, tx.id, tx.tenantId || 'default_tenant', agentId,
-          JSON.stringify({ amount: tx.amount, merchant: tx.merchant, productId: tx.productId }),
-          prevEvtHash, evtHash, tx.policyId || null, tx.policyVersion || 1, tx.timestamp
-        ]);
       }
 
-      // Release Redis budget if guard denied — Redis is ephemeral, not source of truth
+      // Release Redis budget if guard denied
       if (result.decision !== 'allowed' && !purchase.override) {
         await this.tokenBucket.releaseReserve(agentId, purchase.amount ?? 0);
       }
@@ -661,7 +683,7 @@ export class PostgresReserveStore implements IReserveStore {
         return { success: true, transactionId: tx.id };
       }
 
-      // Validate state transition: only reserved/order_created/authorized/order_creation_unknown can become captured
+      // Validate state transition
       const captureableStatuses = ['reserved', 'order_creation_unknown', 'order_created', 'authorized'];
       if (!captureableStatuses.includes(currentPaymentStatus)) {
         await client.query('ROLLBACK');
@@ -684,30 +706,17 @@ export class PostgresReserveStore implements IReserveStore {
         [amount, agentId]
       );
 
-      // Append PAYMENT_CAPTURED ledger event
-      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-      const timestamp = new Date().toISOString();
-      const prevEvtHash = await this.getLastLedgerEventHash(tx.agent_id || agentId);
-      const payloadHash = calculatePayloadHash({ amount, razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id });
-      const seqRes = await client.query(
-        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
-        [tx.id]
-      );
-      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
-      const evtHash = calculateLedgerEventHash({
-        id: eventId, transactionId: tx.id, eventType: 'PAYMENT_CAPTURED',
-        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      // Append PAYMENT_CAPTURED via the transactional helper — same client, same tx
+      await this.appendLedgerEventTx(client, {
+        transactionId: tx.id,
+        tenantId: tx.tenant_id || 'default_tenant',
+        agentId: tx.agent_id || agentId,
+        eventType: 'PAYMENT_CAPTURED',
+        payload: { amount, razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id },
+        timestamp: new Date().toISOString(),
+        policyId: tx.policy_id || undefined,
+        policyVersion: tx.policy_version || undefined,
       });
-
-      await client.query(`
-        INSERT INTO ledger_events (
-          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
-        ) VALUES ($1, $2, $3, $4, 'PAYMENT_CAPTURED', $5::jsonb, $6, $7, $8, $9, $10, $11)
-      `, [
-        eventId, tx.id, tx.tenant_id || 'default_tenant', agentId,
-        JSON.stringify({ amount, razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id }),
-        sequenceNum, prevEvtHash, evtHash, tx.policy_id || null, tx.policy_version || 1, timestamp
-      ]);
 
       await client.query('COMMIT');
       return { success: true, transactionId: tx.id };
@@ -745,7 +754,6 @@ export class PostgresReserveStore implements IReserveStore {
         return { success: true };
       }
 
-      // Only transition from reserved/order_created states
       const authorizableStatuses = ['reserved', 'order_creation_unknown', 'order_created'];
       if (!authorizableStatuses.includes(currentStatus)) {
         await client.query('ROLLBACK');
@@ -760,30 +768,17 @@ export class PostgresReserveStore implements IReserveStore {
         WHERE id = $2
       `, [razorpayPaymentId ?? null, tx.id]);
 
-      // Append ledger event — funds remain in heldPaise
-      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-      const timestamp = new Date().toISOString();
-      const prevEvtHash = await this.getLastLedgerEventHash(tx.agent_id || agentId);
-      const payloadHash = calculatePayloadHash({ razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id, status: 'authorized' });
-      const seqRes = await client.query(
-        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
-        [tx.id]
-      );
-      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
-      const evtHash = calculateLedgerEventHash({
-        id: eventId, transactionId: tx.id, eventType: 'ORDER_ATTACHED',
-        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      // Append PAYMENT_AUTHORIZED via the transactional helper — same client, same tx
+      await this.appendLedgerEventTx(client, {
+        transactionId: tx.id,
+        tenantId: tx.tenant_id || 'default_tenant',
+        agentId: tx.agent_id || agentId,
+        eventType: 'PAYMENT_AUTHORIZED',
+        payload: { razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id, status: 'authorized' },
+        timestamp: new Date().toISOString(),
+        policyId: tx.policy_id || undefined,
+        policyVersion: tx.policy_version || undefined,
       });
-
-      await client.query(`
-        INSERT INTO ledger_events (
-          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
-        ) VALUES ($1, $2, $3, $4, 'ORDER_ATTACHED', $5::jsonb, $6, $7, $8, $9, $10, $11)
-      `, [
-        eventId, tx.id, tx.tenant_id || 'default_tenant', agentId,
-        JSON.stringify({ razorpayPaymentId, razorpayOrderId: tx.razorpay_order_id, status: 'authorized' }),
-        sequenceNum, prevEvtHash, evtHash, tx.policy_id || null, tx.policy_version || 1, timestamp
-      ]);
 
       await client.query('COMMIT');
       return { success: true };
@@ -825,7 +820,6 @@ export class PostgresReserveStore implements IReserveStore {
         return { success: true, transactionId: tx.id, releasedAmountPaise: 0 };
       }
 
-      // Only release from held states
       const releaseableStatuses = ['reserved', 'order_creation_unknown', 'order_created'];
       if (!releaseableStatuses.includes(currentPaymentStatus)) {
         await client.query('ROLLBACK');
@@ -844,30 +838,17 @@ export class PostgresReserveStore implements IReserveStore {
         [amount, agentId]
       );
 
-      // Append RESERVATION_RELEASED ledger event
-      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-      const timestamp = new Date().toISOString();
-      const prevEvtHash = await this.getLastLedgerEventHash(tx.agent_id || agentId);
-      const payloadHash = calculatePayloadHash({ releasedAmount: amount, reason });
-      const seqRes = await client.query(
-        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
-        [tx.id]
-      );
-      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
-      const evtHash = calculateLedgerEventHash({
-        id: eventId, transactionId: tx.id, eventType: 'RESERVATION_RELEASED',
-        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      // Append RESERVATION_RELEASED via the transactional helper — same client, same tx
+      await this.appendLedgerEventTx(client, {
+        transactionId: tx.id,
+        tenantId: tx.tenant_id || 'default_tenant',
+        agentId: tx.agent_id || agentId,
+        eventType: 'RESERVATION_RELEASED',
+        payload: { releasedAmount: amount, reason },
+        timestamp: new Date().toISOString(),
+        policyId: tx.policy_id || undefined,
+        policyVersion: tx.policy_version || undefined,
       });
-
-      await client.query(`
-        INSERT INTO ledger_events (
-          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
-        ) VALUES ($1, $2, $3, $4, 'RESERVATION_RELEASED', $5::jsonb, $6, $7, $8, $9, $10, $11)
-      `, [
-        eventId, tx.id, tx.tenant_id || 'default_tenant', agentId,
-        JSON.stringify({ releasedAmount: amount, reason }),
-        sequenceNum, prevEvtHash, evtHash, tx.policy_id || null, tx.policy_version || 1, timestamp
-      ]);
 
       await client.query('COMMIT');
       return { success: true, transactionId: tx.id, releasedAmountPaise: amount };
@@ -920,13 +901,12 @@ export class PostgresReserveStore implements IReserveStore {
       const originalTx = txRes.rows[0];
       const currentPaymentStatus = originalTx.payment_status;
 
-      // Only captured/partially_refunded transactions can be refunded
       if (!['captured', 'partially_refunded'].includes(currentPaymentStatus)) {
         await client.query('ROLLBACK');
         return { success: false, error: `Cannot refund transaction in '${currentPaymentStatus}' state` };
       }
 
-      // Idempotent refund check: if same refundId was already processed, return success
+      // Idempotent: same refundId already processed
       if (refundId) {
         const existingRefund = await client.query(
           "SELECT id FROM ledger_events WHERE transaction_id = $1 AND event_type = 'PAYMENT_REFUNDED' AND payload->>'refundId' = $2",
@@ -967,30 +947,22 @@ export class PostgresReserveStore implements IReserveStore {
 
       const refundTxId = refundId || `ref_${Date.now()}`;
 
-      // Append PAYMENT_REFUNDED ledger event
-      const eventId = `evt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
-      const timestamp = new Date().toISOString();
-      const prevEvtHash = await this.getLastLedgerEventHash(originalTx.agent_id || agentId);
-      const payloadHash = calculatePayloadHash({ refundId: refundTxId, refundAmountPaise, totalRefundedPaise: newRefundedTotal, reason: reason || 'Refund processed' });
-      const seqRes = await client.query(
-        'SELECT COALESCE(MAX(sequence_num), 0) + 1 AS next_seq FROM ledger_events WHERE transaction_id = $1',
-        [originalTx.id]
-      );
-      const sequenceNum = parseInt(seqRes.rows[0].next_seq, 10);
-      const evtHash = calculateLedgerEventHash({
-        id: eventId, transactionId: originalTx.id, eventType: 'PAYMENT_REFUNDED',
-        timestamp, payloadHash, sequenceNum, prevHash: prevEvtHash,
+      // Append PAYMENT_REFUNDED via the transactional helper — same client, same tx
+      await this.appendLedgerEventTx(client, {
+        transactionId: originalTx.id,
+        tenantId: originalTx.tenant_id || 'default_tenant',
+        agentId: originalTx.agent_id || agentId,
+        eventType: 'PAYMENT_REFUNDED',
+        payload: {
+          refundId: refundTxId,
+          refundAmountPaise,
+          totalRefundedPaise: newRefundedTotal,
+          reason: reason || 'Refund processed',
+        },
+        timestamp: new Date().toISOString(),
+        policyId: originalTx.policy_id || undefined,
+        policyVersion: originalTx.policy_version || undefined,
       });
-
-      await client.query(`
-        INSERT INTO ledger_events (
-          id, transaction_id, tenant_id, agent_id, event_type, payload, sequence_num, prev_hash, hash, policy_id, policy_version, timestamp
-        ) VALUES ($1, $2, $3, $4, 'PAYMENT_REFUNDED', $5::jsonb, $6, $7, $8, $9, $10, $11)
-      `, [
-        eventId, originalTx.id, originalTx.tenant_id || 'default_tenant', agentId,
-        JSON.stringify({ refundId: refundTxId, refundAmountPaise, totalRefundedPaise: newRefundedTotal, reason: reason || 'Refund processed' }),
-        sequenceNum, prevEvtHash, evtHash, originalTx.policy_id || null, originalTx.policy_version || 1, timestamp
-      ]);
 
       await client.query('COMMIT');
       return { success: true, refundId: refundTxId, refundedAmountPaise: refundAmountPaise };
@@ -1006,6 +978,7 @@ export class PostgresReserveStore implements IReserveStore {
   async disputeTransaction(
     orderIdOrPaymentId: string,
     disputeReason?: string,
+    disputeId?: string,
     agentId = 'default_agent'
   ): Promise<DisputeResult> {
     const client = await this.pool.connect();
@@ -1023,11 +996,28 @@ export class PostgresReserveStore implements IReserveStore {
       }
 
       const tx = txRes.rows[0];
+      const previousStatus = tx.payment_status as string;
 
       await client.query(
         "UPDATE transactions SET status = 'disputed', payment_status = 'disputed', reason = $1 WHERE id = $2",
         [disputeReason || 'Payment dispute filed', tx.id]
       );
+
+      // Append PAYMENT_DISPUTED via the transactional helper — same client, same tx
+      await this.appendLedgerEventTx(client, {
+        transactionId: tx.id,
+        tenantId: tx.tenant_id || 'default_tenant',
+        agentId: tx.agent_id || agentId,
+        eventType: 'PAYMENT_DISPUTED',
+        payload: {
+          reason: disputeReason || 'Payment dispute filed',
+          disputeId: disputeId || null,
+          previousStatus,
+        },
+        timestamp: new Date().toISOString(),
+        policyId: tx.policy_id || undefined,
+        policyVersion: tx.policy_version || undefined,
+      });
 
       await client.query('COMMIT');
       return { success: true, transactionId: tx.id, status: 'disputed' };
@@ -1164,8 +1154,8 @@ export class PostgresReserveStore implements IReserveStore {
           [row.id]
         );
 
-        // Append RESERVATION_EXPIRED ledger event
-        await this.appendLedgerEvent({
+        // Append RESERVATION_EXPIRED via the transactional helper — same client, same tx
+        await this.appendLedgerEventTx(client, {
           transactionId: row.id,
           tenantId: 'default_tenant',
           agentId,
@@ -1190,4 +1180,3 @@ export class PostgresReserveStore implements IReserveStore {
     }
   }
 }
-
