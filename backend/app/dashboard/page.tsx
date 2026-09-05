@@ -477,7 +477,7 @@ export default function Home() {
         <section className="relative bg-[#0b0d0e] border border-[#23272a] rounded-[2px] shadow-xl overflow-hidden">
           <CornerBrackets color="#353535" size={12} />
           <button onClick={() => setShowAdminTools((p) => !p)} className="w-full px-5 py-3 flex items-center justify-between text-[10px] font-pixel text-[#5a5e62] uppercase tracking-widest hover:text-[#ff571a] transition">
-            <span className="flex items-center gap-2"><Zap className="w-3.5 h-3.5" />// 09 MANUAL SIMULATOR & POLICY TOOLS</span>
+            <span className="flex items-center gap-2"><Zap className="w-3.5 h-3.5" />{"// 09 MANUAL SIMULATOR & POLICY TOOLS"}</span>
             <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showAdminTools ? 'rotate-180' : ''}`} />
           </button>
 
@@ -497,7 +497,7 @@ export default function Home() {
                     </button>
                   </div>
                   <pre className="w-full h-24 p-3 bg-[#070809] border border-[#23272a] rounded-[2px] text-xs text-[#22c55e] font-mono overflow-auto">
-                    {parsedPolicy ? JSON.stringify(parsedPolicy, null, 2) : <span className="text-[#5a5e62]">// policy will appear here</span>}
+                    {parsedPolicy ? JSON.stringify(parsedPolicy, null, 2) : <span className="text-[#5a5e62]">{"// policy will appear here"}</span>}
                   </pre>
                 </div>
               </div>

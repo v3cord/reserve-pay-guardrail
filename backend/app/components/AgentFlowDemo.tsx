@@ -108,8 +108,23 @@ export default function AgentFlowDemo({ onPurchaseComplete, triggerRazorpayCheck
       const category = parsedPolicy?.category || '';
       const maxPrice = parsedPolicy?.amountCeiling ? parsedPolicy.amountCeiling / 100 : undefined;
       const catalogUrl = `/api/catalog-search?q=${encodeURIComponent(intent)}&${category ? `category=${encodeURIComponent(category)}&` : ''}${maxPrice ? `maxPrice=${maxPrice}` : ''}`;
-      const catalogRes = await fetch(catalogUrl).then((r) => r.json());
-      const products: CatalogProduct[] = catalogRes.products || [];
+      const catalogRes = await fetch(catalogUrl).then((r) => r.json()).catch(() => ({}));
+
+      if (catalogRes.error) {
+        throw new Error(catalogRes.error);
+      }
+
+      let products: CatalogProduct[] = catalogRes.products || [];
+
+      // Fallback: If strict category or filter returned 0 products, try search with just the query
+      if (products.length === 0) {
+        const fallbackUrl = `/api/catalog-search?q=${encodeURIComponent(intent)}`;
+        const fallbackRes = await fetch(fallbackUrl).then((r) => r.json()).catch(() => ({}));
+        if (fallbackRes.products && fallbackRes.products.length > 0) {
+          products = fallbackRes.products;
+        }
+      }
+
       const selectedProduct = products[0] || null;
 
       setResult((p) => ({ ...p, catalogResults: products, selectedProduct: selectedProduct ?? undefined }));

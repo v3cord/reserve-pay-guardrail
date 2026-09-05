@@ -68,6 +68,7 @@ export async function POST(request: Request) {
       activePolicy: body.setActive ? await getActivePolicy(agentId) : undefined,
     });
   } catch (err: unknown) {
+    console.error('[API /api/parse-intent Error]:', err);
     const errorMsg = err instanceof Error ? err.message : 'Unknown error';
     return NextResponse.json(
       { error: 'Failed to parse intent', details: errorMsg },

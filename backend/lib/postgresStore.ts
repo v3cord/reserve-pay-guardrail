@@ -14,6 +14,7 @@ export class PostgresReserveStore implements IReserveStore {
   readonly storeType: ReserveStoreType = 'postgres';
   private pool: Pool;
   private tokenBucket: IRedisTokenBucket;
+  private policyCache: Map<string, { policy: Policy; expiresAt: number }> = new Map();
 
   constructor(pool?: Pool, tokenBucket?: IRedisTokenBucket) {
     this.pool = pool || getPgPool();
@@ -290,12 +291,17 @@ export class PostgresReserveStore implements IReserveStore {
   }
 
   async getActivePolicy(agentId = 'default_agent'): Promise<Policy> {
+    const cached = this.policyCache.get(agentId);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.policy;
+    }
+
     const res = await this.pool.query(
       'SELECT * FROM policies WHERE agent_id = $1 LIMIT 1',
       [agentId]
     );
     if (res.rows.length === 0) {
-      return {
+      const defaultPolicy: Policy = {
         amountCeiling: 50000,
         category: 'Electronics',
         merchantMode: 'allowlist',
@@ -303,6 +309,8 @@ export class PostgresReserveStore implements IReserveStore {
         sessionCap: 100000,
         version: 1,
       };
+      this.policyCache.set(agentId, { policy: defaultPolicy, expiresAt: Date.now() + 5000 });
+      return defaultPolicy;
     }
     const row = res.rows[0];
     const allowedMerchants = typeof row.allowed_merchants === 'string'
@@ -313,7 +321,7 @@ export class PostgresReserveStore implements IReserveStore {
       ? (typeof row.allowed_mcc_codes === 'string' ? JSON.parse(row.allowed_mcc_codes) : row.allowed_mcc_codes)
       : undefined;
 
-    return {
+    const policy: Policy = {
       id: row.id ? String(row.id) : 'default_policy',
       version: row.version ? parseInt(row.version, 10) : 1,
       amountCeiling: row.amount_ceiling ? parseInt(row.amount_ceiling, 10) : undefined,
@@ -326,6 +334,9 @@ export class PostgresReserveStore implements IReserveStore {
       sessionId: row.session_id || undefined,
       tenantId: row.tenant_id || undefined,
     };
+
+    this.policyCache.set(agentId, { policy, expiresAt: Date.now() + 5000 });
+    return policy;
   }
 
   async getPolicy(agentId = 'default_agent'): Promise<Policy> {
@@ -333,6 +344,7 @@ export class PostgresReserveStore implements IReserveStore {
   }
 
   async setActivePolicy(policy: Policy, agentId = 'default_agent'): Promise<Policy> {
+    this.policyCache.delete(agentId);
     const allowedMerchantsJson = JSON.stringify(policy.allowedMerchants || []);
     const allowedMccCodesJson = policy.allowedMccCodes ? JSON.stringify(policy.allowedMccCodes) : null;
     const version = (policy.version ?? 1) + 1;
@@ -363,6 +375,7 @@ export class PostgresReserveStore implements IReserveStore {
       version,
     ]);
 
+    this.policyCache.delete(agentId);
     return this.getActivePolicy(agentId);
   }
 
@@ -522,14 +535,22 @@ export class PostgresReserveStore implements IReserveStore {
       const capPaise = activePolicy.sessionCap || 200000;
       const tokenResult = await this.tokenBucket.acquireReserve(agentId, purchase.amount ?? 0, capPaise);
       if (!tokenResult.allowed) {
-        const currentState = await this.getReserveState(agentId, purchase.sessionId);
         return {
           decision: 'denied',
           decisionStatus: 'denied',
           paymentStatus: 'failed',
           reason: tokenResult.reason || `Rate limit budget pool exceeded for agent ${agentId}`,
           ruleViolated: 'RATE_LIMIT_EXCEEDED',
-          updatedReserveState: currentState,
+          updatedReserveState: {
+            totalPaise: capPaise,
+            heldPaise: Math.max(0, capPaise - (tokenResult.remainingBudgetPaise ?? 0)),
+            settledPaise: 0,
+            availablePaise: tokenResult.remainingBudgetPaise ?? 0,
+            total: capPaise,
+            remaining: tokenResult.remainingBudgetPaise ?? 0,
+            transactions: [],
+            ledgerEvents: [],
+          },
         };
       }
     }
@@ -1134,7 +1155,7 @@ export class PostgresReserveStore implements IReserveStore {
       await client.query('BEGIN');
 
       const staleRes = await client.query(
-        "SELECT id, amount FROM transactions WHERE agent_id = $1 AND payment_status IN ('reserved', 'order_creation_unknown') AND expires_at IS NOT NULL AND expires_at < NOW()",
+        "SELECT id, amount FROM transactions WHERE agent_id = $1 AND payment_status IN ('reserved', 'order_creation_unknown') AND ((expires_at IS NOT NULL AND expires_at < NOW()) OR (created_at IS NOT NULL AND created_at < NOW() - INTERVAL '30 minutes') OR (expires_at IS NULL AND created_at IS NULL))",
         [agentId]
       );
 

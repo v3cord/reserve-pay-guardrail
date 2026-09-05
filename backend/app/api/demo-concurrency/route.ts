@@ -45,7 +45,7 @@ export async function POST(request: Request) {
     }
   } catch (err) {}
   
-  const unitAmount = 80000; // ₹800
+  const unitAmount = 60000; // ₹600 (within single item ceiling & reserve cap)
 
   // N requests concurrently
   const promises = Array.from({ length: N }, (_, i) =>
@@ -68,6 +68,14 @@ export async function POST(request: Request) {
   const totalFinancialEffect = finalState.heldPaise + finalState.settledPaise;
   const overspend = Math.max(0, totalFinancialEffect - budgetPaise);
 
+  const items = results.map((r, i) => ({
+    index: i + 1,
+    id: r.transaction?.id || `attack_conc_${i + 1}_${testAgentId}`,
+    decision: r.decision,
+    amount: unitAmount,
+    reason: r.reason || (r.decision === 'allowed' ? 'Authorized & Atomic Reserve Lock Acquired' : 'Token Bucket Rate Limit / Reserve Exhausted')
+  }));
+
   return NextResponse.json({
     requestsCount: N,
     allowed,
@@ -75,6 +83,7 @@ export async function POST(request: Request) {
     totalReserved: finalState.heldPaise,
     totalFinancialEffect,
     overspend,
-    testAgentId
+    testAgentId,
+    items
   });
 }

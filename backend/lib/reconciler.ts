@@ -30,7 +30,10 @@ interface ReconcileTxRecord {
  */
 const MAX_RECONCILE_ATTEMPTS = 3;
 
-export async function runReconciliation(agentId?: string): Promise<ReconciliationSummary> {
+export async function runReconciliation(
+  agentId?: string,
+  options?: { forceReleaseIfNotFound?: boolean }
+): Promise<ReconciliationSummary> {
   const summary: ReconciliationSummary = {
     scannedCount: 0,
     orderReconciledCount: 0,
@@ -41,8 +44,9 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
 
   try {
     let unknownTxs: ReconcileTxRecord[] = [];
+    const isPostgres = Boolean(process.env.DATABASE_URL || process.env.STORAGE_TYPE === 'postgres' || process.env.POSTGRES_URL);
 
-    if (process.env.STORAGE_TYPE === 'postgres' || process.env.POSTGRES_URL) {
+    if (isPostgres) {
       const pool = getPgPool();
       let query = `
         SELECT id, agent_id, amount, payment_status, status,
@@ -176,8 +180,9 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
 
         } else if (outcome.kind === 'NOT_FOUND') {
           const newAttempts = tx.reconcileAttempts + 1;
+          const maxAttempts = options?.forceReleaseIfNotFound ? 1 : MAX_RECONCILE_ATTEMPTS;
 
-          if (newAttempts >= MAX_RECONCILE_ATTEMPTS) {
+          if (newAttempts >= maxAttempts) {
             // Razorpay has definitively not seen this order across multiple checks → safe to release
             await releaseReservation(
               tx.id,
@@ -247,7 +252,8 @@ export async function runReconciliation(agentId?: string): Promise<Reconciliatio
  */
 async function incrementReconcileAttempts(txId: string, newCount: number): Promise<void> {
   try {
-    if (process.env.STORAGE_TYPE === 'postgres' || process.env.POSTGRES_URL) {
+    const isPostgres = Boolean(process.env.DATABASE_URL || process.env.STORAGE_TYPE === 'postgres' || process.env.POSTGRES_URL);
+    if (isPostgres) {
       const pool = getPgPool();
       await pool.query(
         'UPDATE transactions SET reconcile_attempts = $1 WHERE id = $2',

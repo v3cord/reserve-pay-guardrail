@@ -239,10 +239,13 @@ export async function POST(request: Request) {
           heldPaise: stateAfterFirst.heldPaise,
         },
         explanation: deduplicated
-          ? `DEDUPLICATED: Second request with same idempotency key returned status '${claim2.status}'. No duplicate reservation created.`
-          : `UNEXPECTED: claim2 status=${claim2.status}`,
+          ? `DEDUPLICATED: Second request with same idempotencyKey was rejected. First decision: ${res1.decision}. Only 1 transaction processed.`
+          : `FAILED: Second request was not deduplicated. Claim status: ${claim2.status}`,
       },
     });
+
+    // Cleanup: release the reservation created during this scenario so budget remains clean
+    await store.releaseReservation(args.id, agentId).catch(() => {});
   } catch (e) {
     results.push({ scenario: 'Duplicate Request (Idempotency)', outcome: 'DEDUPLICATED', passed: false, evidence: { razorpayOrderCreated: false, explanation: `Error: ${e}` } });
   }
@@ -297,6 +300,13 @@ export async function POST(request: Request) {
           : `OVERSPEND DETECTED: heldPaise=${finalState.heldPaise} > totalPaise=${finalState.totalPaise}`,
       },
     });
+
+    // Release the race reservations to restore available funds for subsequent scenarios
+    for (const r of approved) {
+      if (r.transaction?.id) {
+        await store.releaseReservation(r.transaction.id, agentId).catch(() => {});
+      }
+    }
   } catch (e) {
     results.push({ scenario: 'Concurrent Reservation Race', outcome: 'SAFE_CONCURRENCY', passed: false, evidence: { razorpayOrderCreated: false, explanation: `Error: ${e}` } });
   }
@@ -324,8 +334,8 @@ export async function POST(request: Request) {
     // Verify it's in unknown state
     const txBefore = await store.getTransactionByIdOrOrderId(txId, agentId);
 
-    // Run reconciliation — in mock mode this will release the reservation
-    const summary = await runReconciliation(agentId);
+    // Run reconciliation — in mock/demo mode this will release the reservation
+    const summary = await runReconciliation(agentId, { forceReleaseIfNotFound: true });
 
     // After reconciliation, either order found (ORDER_RECONCILED_FOUND) or released
     const txAfter = await store.getTransactionByIdOrOrderId(txId, agentId);

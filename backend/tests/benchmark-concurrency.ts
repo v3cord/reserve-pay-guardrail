@@ -32,7 +32,7 @@ async function runConcurrencyBenchmark() {
   const startTime = Date.now();
   const requests = Array.from({ length: concurrencyCount }, (_, i) => {
     return store.processPurchaseAtomic({
-      id: `bench_tx_${i}`,
+      id: `bench_tx_${startTime}_${i}`,
       agentId,
       merchant: 'Swiggy',
       amount: itemPricePaise,

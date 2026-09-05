@@ -349,7 +349,21 @@ export class RedisTokenBucket implements IRedisTokenBucket {
 // ---------------------------------------------------------------------------
 // Singleton — replaced at startup by instrumentation.ts
 // ---------------------------------------------------------------------------
-let activeBucket: IRedisTokenBucket = new InMemoryTokenBucket();
+let activeBucket: IRedisTokenBucket;
+
+const hasUpstash =
+  (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) ||
+  (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN);
+
+const hasTcpRedis = Boolean(process.env.REDIS_URL);
+
+if (hasUpstash) {
+  activeBucket = new UpstashTokenBucket();
+} else if (hasTcpRedis) {
+  activeBucket = new RedisTokenBucket(process.env.REDIS_URL);
+} else {
+  activeBucket = new InMemoryTokenBucket();
+}
 
 export function getTokenBucket(): IRedisTokenBucket {
   return activeBucket;

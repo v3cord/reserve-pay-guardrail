@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import path from 'path';
+import path from 'node:path';
 import { Pool, PoolConfig } from 'pg';
 
 let pgPool: Pool | null = null;
@@ -11,7 +11,7 @@ export function getPgPoolConfig(): PoolConfig {
     connectionString,
     max: parseInt(process.env.PG_POOL_MAX || '20', 10),
     idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 5000,
+    connectionTimeoutMillis: 30000,
     ssl: isRemote ? { rejectUnauthorized: false } : undefined,
   };
 }
@@ -37,7 +37,7 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
   const p = pool || getPgPool();
   const client = await p.connect();
   try {
-    await client.query('BEGIN');
+    // No BEGIN/COMMIT transaction block to avoid 25P02 aborts on IF NOT EXISTS statements
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS policies (
@@ -146,12 +146,17 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
       );
     `);
 
-    await client.query(`
-      ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS owner_token VARCHAR(255);
-    `);
-    await client.query(`
-      ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
-    `);
+    try {
+      await client.query(`
+        ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS owner_token VARCHAR(255);
+      `);
+    } catch (e) {}
+    
+    try {
+      await client.query(`
+        ALTER TABLE idempotency_keys ADD COLUMN IF NOT EXISTS lease_expires_at TIMESTAMPTZ;
+      `);
+    } catch (e) {}
 
     await client.query(`
       CREATE TABLE IF NOT EXISTS webhook_events (
@@ -178,6 +183,27 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
       );
     `);
 
+    // Run ALTER TABLE migrations before creating indexes to ensure columns exist
+    try {
+      await client.query(`ALTER TABLE policies ADD COLUMN IF NOT EXISTS version INT NOT NULL DEFAULT 1`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS decision_status VARCHAR(64) NOT NULL DEFAULT 'allowed'`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS payment_status VARCHAR(64) NOT NULL DEFAULT 'requested'`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS mcc_code VARCHAR(32)`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS product_id VARCHAR(255)`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS catalog_version VARCHAR(64)`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS razorpay_order_id VARCHAR(255)`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS razorpay_payment_id VARCHAR(255)`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS policy_id VARCHAR(255)`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS policy_version INT DEFAULT 1`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS session_id VARCHAR(255)`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS captured_paise BIGINT DEFAULT 0`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS refunded_paise BIGINT DEFAULT 0`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ`);
+      await client.query(`ALTER TABLE transactions ADD COLUMN IF NOT EXISTS reconcile_attempts INT DEFAULT 0`);
+    } catch (migErr) {
+      console.error('[Postgres Migration Notice]', migErr);
+    }
+
     // Financial performance indexes
     await client.query(`
       CREATE INDEX IF NOT EXISTS idx_transactions_agent_session_status
@@ -194,9 +220,7 @@ export async function initPostgresDatabase(pool?: Pool): Promise<void> {
       ON transactions (payment_status) WHERE payment_status = 'order_creation_unknown';
     `);
 
-    await client.query('COMMIT');
   } catch (err) {
-    await client.query('ROLLBACK');
     throw err;
   } finally {
     client.release();

@@ -188,6 +188,92 @@ export function findCatalogProductBySearch(query: string): CatalogProduct | null
   return null;
 }
 
+export function normalizeCategory(category?: string): string | undefined {
+  if (!category) return undefined;
+  const lower = category.toLowerCase().trim();
+
+  if (
+    lower.includes('food') ||
+    lower.includes('dining') ||
+    lower.includes('restaurant') ||
+    lower.includes('dinner') ||
+    lower.includes('lunch') ||
+    lower.includes('meal') ||
+    lower.includes('dish') ||
+    lower.includes('swiggy') ||
+    lower.includes('zomato') ||
+    lower.includes('cafe') ||
+    lower.includes('eat') ||
+    lower.includes('beverage')
+  ) {
+    return 'Food & Dining';
+  }
+
+  if (
+    lower.includes('grocer') ||
+    lower.includes('supermarket') ||
+    lower.includes('instamart') ||
+    lower.includes('market') ||
+    lower.includes('vegetable') ||
+    lower.includes('fruit') ||
+    lower.includes('basket') ||
+    lower.includes('blinkit') ||
+    lower.includes('zepto')
+  ) {
+    return 'Groceries';
+  }
+
+  if (
+    lower.includes('electr') ||
+    lower.includes('gadget') ||
+    lower.includes('tech') ||
+    lower.includes('audio') ||
+    lower.includes('headphone') ||
+    lower.includes('device') ||
+    lower.includes('phone') ||
+    lower.includes('laptop')
+  ) {
+    return 'Electronics';
+  }
+
+  if (
+    lower.includes('travel') ||
+    lower.includes('ride') ||
+    lower.includes('cab') ||
+    lower.includes('taxi') ||
+    lower.includes('transport') ||
+    lower.includes('uber') ||
+    lower.includes('ola') ||
+    lower.includes('commute')
+  ) {
+    return 'Travel';
+  }
+
+  if (
+    lower.includes('cloth') ||
+    lower.includes('apparel') ||
+    lower.includes('fashion') ||
+    lower.includes('wear') ||
+    lower.includes('shirt') ||
+    lower.includes('garment') ||
+    lower.includes('zara') ||
+    lower.includes('myntra')
+  ) {
+    return 'Clothing';
+  }
+
+  if (
+    lower.includes('gambl') ||
+    lower.includes('bet') ||
+    lower.includes('casino') ||
+    lower.includes('poker')
+  ) {
+    return 'Gambling';
+  }
+
+  return category;
+}
+
 export interface CatalogSearchFilters {
   category?: string;
   maxPricePaise?: number;
@@ -201,23 +287,63 @@ export function searchCatalog(query: string, filters?: CatalogSearchFilters): Ca
   const lower = (query || '').toLowerCase().trim();
   const products = Object.values(CATALOG_PRODUCTS);
 
+  // Normalize numbers/words: e.g. "two" <-> "2"
+  const normalizedQuery = lower
+    .replace(/\btwo\b/gi, '2')
+    .replace(/\bone\b/gi, '1')
+    .replace(/\bthree\b/gi, '3');
+
+  const stopWords = new Set(['a', 'an', 'the', 'for', 'in', 'on', 'of', 'and', 'under', 'order', 'to', 'with', 'from', 'at', 'by', 'rupees', 'rs', 'inr']);
+  const words = normalizedQuery
+    .split(/[^a-z0-9]+/i)
+    .filter((w) => w.length >= 2 && !stopWords.has(w));
+
+  const targetCategory = normalizeCategory(filters?.category);
+
   const scored = products
     .map((p) => {
       let score = 0;
+      const pName = (p.name || '').toLowerCase();
+      const pMerchant = (p.merchantName || '').toLowerCase();
+      const pId = (p.productId || '').toLowerCase();
+      const pCategory = (p.category || '').toLowerCase();
+
       if (lower) {
-        if (p.name?.toLowerCase().includes(lower)) score += 10;
-        if (p.merchantName.toLowerCase().includes(lower)) score += 8;
-        if (p.productId.toLowerCase().includes(lower)) score += 6;
-        if (p.category.toLowerCase().includes(lower)) score += 4;
+        // Direct full query match
+        if (pName.includes(lower)) score += 30;
+        if (pMerchant.includes(lower)) score += 20;
+        if (pId.includes(lower)) score += 15;
+        if (pCategory.includes(lower)) score += 10;
+
+        // Reverse match: prompt contains product name or merchant name
+        if (pName && lower.includes(pName)) score += 25;
+        if (pMerchant && lower.includes(pMerchant)) score += 15;
+
+        // Word-level matching
+        for (const w of words) {
+          if (pName.includes(w)) score += 10;
+          if (pMerchant.includes(w)) score += 6;
+          if (pId.includes(w)) score += 5;
+          if (pCategory.includes(w)) score += 4;
+        }
       } else {
         score = 1; // Return all when no query
       }
 
-      // Apply filters
-      if (filters?.category) {
-        const filterCat = filters.category.toLowerCase();
-        if (!p.category.toLowerCase().includes(filterCat)) return null;
+      // Category matching boost
+      if (targetCategory) {
+        const prodCatNorm = normalizeCategory(p.category);
+        if (prodCatNorm === targetCategory) {
+          score += 20;
+        } else if (filters?.category) {
+          const rawCat = filters.category.toLowerCase().trim();
+          if (pCategory.includes(rawCat) || rawCat.includes(pCategory)) {
+            score += 10;
+          }
+        }
       }
+
+      // Apply max price filter
       if (filters?.maxPricePaise !== undefined) {
         if (p.unitPricePaise > filters.maxPricePaise) return null;
       }
@@ -225,6 +351,16 @@ export function searchCatalog(query: string, filters?: CatalogSearchFilters): Ca
       return score > 0 ? { product: p, score } : null;
     })
     .filter((x): x is { product: CatalogProduct; score: number } => x !== null);
+
+  // If a specific category was targeted, filter to that category if matches exist
+  if (targetCategory) {
+    const inCategory = scored.filter(x => normalizeCategory(x.product.category) === targetCategory);
+    if (inCategory.length > 0) {
+      return inCategory
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.product);
+    }
+  }
 
   return scored
     .sort((a, b) => b.score - a.score)

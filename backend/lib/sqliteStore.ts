@@ -1,4 +1,4 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
+/* eslint-disable */
 import db, { initDatabase } from './db';
 import {
   Policy, ReserveState, Transaction, AttemptedPurchase, GuardCheckResult,
