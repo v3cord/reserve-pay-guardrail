@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "test": "vitest run"
+    "sync:frontend": "node -e \"const fs = require('fs'); fs.cpSync('../frontend', './public', { recursive: true }); fs.cpSync('../frontend', './public/landing', { recursive: true }); console.log('Landing page synced from frontend/ to public/');\"",
+    "test": "vitest run --config vitest.config.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.18.0",

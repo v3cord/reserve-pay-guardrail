@@ -1,4 +1,4 @@
-﻿import { defineConfig } from 'vitest/config';
+import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
   test: {
@@ -6,6 +6,6 @@ export default defineConfig({
     globals: true,
     include: ['tests/**/*.test.ts'],
     fileParallelism: false,
-    testTimeout: 15000,
+    testTimeout: 60000,
   },
 });

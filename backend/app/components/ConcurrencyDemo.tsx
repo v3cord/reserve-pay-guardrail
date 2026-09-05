@@ -491,7 +491,7 @@ export default function ConcurrencyDemo() {
           {logs.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-[#5a5e62] space-y-2 py-8">
               <div className="font-pixel text-[10px] text-[#ff571a] tracking-widest uppercase">
-                // CONCURRENCY FLOOD TEST HARNESS READY
+                {"// CONCURRENCY FLOOD TEST HARNESS READY"}
               </div>
               <div className="text-center text-[10px] max-w-md text-[#8e9296] leading-relaxed">
                 Target: <code className="text-white">POST /api/reserve (processPurchaseAtomic)</code><br />

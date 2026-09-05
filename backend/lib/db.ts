@@ -247,6 +247,11 @@ db.pragma('busy_timeout = 5000');
 
 try {
   db.pragma('journal_mode = WAL');
+  if (process.env.NODE_ENV === 'test') {
+    db.pragma('synchronous = OFF');
+  } else {
+    db.pragma('synchronous = NORMAL');
+  }
 } catch {}
 
 export function initDatabase() {

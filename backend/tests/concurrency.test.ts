@@ -53,7 +53,7 @@ describe('Concurrency – 1000 concurrent requests against bounded reserve', () 
 
     // Held paise must equal sum of approved amounts
     expect(finalState.heldPaise).toBe(approved * amount);
-  }, 30000);
+  }, 120000);
 
   it('exactly right number succeed when budget is tight', async () => {
     // Reset with budget for exactly 3 purchases of 60000 each

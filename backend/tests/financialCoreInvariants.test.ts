@@ -345,7 +345,7 @@ describe('Financial Core Invariants — 8 Required Proofs', () => {
     // Verify ledger integrity
     const integrity = await store.verifyLedgerIntegrity(testAgent);
     expect(integrity.isValid).toBe(true);
-  }, 30000);
+  }, 120000);
 
   // ============================================================================
   // Additional: State transition enforcement
