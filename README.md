@@ -1,6 +1,6 @@
 # Reserve Pay Guardrail
 
-> **The Financial Policy Engine & Guardrail for Autonomous AI Commerce**
+> The Financial Policy Engine and Guardrail for Autonomous AI Commerce
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg)](https://www.typescriptlang.org/)
 [![Next.js](https://img.shields.io/badge/Next.js-14.2-black.svg)](https://nextjs.org/)
@@ -13,86 +13,158 @@
 
 ## Overview
 
-When autonomous AI agents make real-world purchases (food delivery, cloud resources, SaaS subscriptions, flight bookings), giving them direct API keys or payment cards introduces real financial risks:
+When autonomous AI agents make real-world purchases (such as food delivery, cloud infrastructure, SaaS subscriptions, and travel bookings), granting them direct access to API credentials or payment cards introduces severe financial liabilities:
 
-- **Prompt Injection & Jailbreaks**: Adversaries manipulating agent goals to drain accounts or purchase unauthorized goods.
-- **Runaway Agent Loops & Double-Spending**: Multiple concurrent agents making simultaneous transactions that blow past budget ceilings.
-- **Unverified Merchant & Category Violations**: Agents ordering from out-of-scope or malicious merchants.
-- **Untracked Ledger Drift**: No tamper-evident audit trail explaining why money moved.
+- Prompt Injection and Jailbreaks: Adversaries manipulate agent goals to drain treasury balances or order unauthorized inventory.
+- Runaway Agent Loops and Race Conditions: Multiple concurrent agent threads dispatching parallel transactions that blow past session caps.
+- Vendor and Category Violations: Agents executing transactions with unapproved, high-risk, or fraudulent merchants.
+- Ledger Drift and Untracked Funds: Lack of a tamper-evident, cryptographically verifiable record explaining why money moved.
 
-**Reserve Pay Guardrail** is a financial policy engine that sits between **Agent Intent** and **Money Movement**:
+Reserve Pay Guardrail is a deterministic financial policy engine that sits between natural language agent intent and physical payment execution:
 
 ```
 [ Natural Language Intent ] -> ( Gemini Policy Synthesis ) -> [ Guardrail Policy ]
-                                                                       │
-[ Agent Purchase Request  ] ───────────────────────────────────────────┘
-         │
-         ▼
+                                                                       |
+[ Agent Purchase Request  ] -------------------------------------------+
+         |
+         v
 [ 1. Multi-Factor Deterministic Guardrail Check ]
-   ├── Merchant Allowlist & Asymmetric Sub-brand Match
-   ├── Category & MCC Code Verification
-   ├── Single Amount Ceiling Check (fail-safe: deny if undefined)
-   ├── Near-limit REVIEW (80–100% of ceiling → flagged, not auto-approved)
-   ├── Cumulative Session Cap Check
-   └── Risk-Based Quantity Anomaly Check (review at 1–2x, deny above 2x)
-         │
-         ▼ (Allowed)
-[ 2. Atomic Local Financial Reservation (PostgreSQL / SQLite) ]
-   └── SQLite IMMEDIATE tx / PostgreSQL SERIALIZABLE isolation + FOR UPDATE
-         │
-         ▼
-[ 3. Razorpay Standard Order Creation ]
-   ├── SUCCESS ───────────────► Razorpay Order Created
-   ├── DEFINITE FAILURE ──────► Instant Compensation & Release
-   └── UNKNOWN (Timeout) ─────► Flagged for Reconciler
-         │
-         ▼
+   |-- Merchant Allowlist & Sub-Brand Normalization
+   |-- Category & MCC Code Verification
+   |-- Single-Transaction Ceiling Check (Fail-Safe: Deny if undefined)
+   |-- Near-Limit Review Trigger (80-100% of ceiling flagged for human review)
+   |-- Cumulative Session Cap Check (Authoritative SQL Aggregate)
+   `-- Risk-Based Quantity Anomaly Verification
+         |
+         v (Approved)
+[ 2. Atomic Financial Reservation ]
+   `-- PostgreSQL SERIALIZABLE + SELECT FOR UPDATE / SQLite BEGIN IMMEDIATE
+         |
+         v
+[ 3. Payment Gateway Order Creation (Razorpay) ]
+   |-- SUCCESS --------------> Order Attached to Active Reservation
+   |-- DEFINITE FAILURE -----> Immediate Reservation Release & Compensation
+   `-- UNKNOWN (Timeout) ----> Flagged for Background Reconciler
+         |
+         v
 [ 4. Payment Capture & Compensating Settlement ]
-   └── Webhook event-first ledger verification + state update
-         │
-         ▼
-[ 5. Append-Only Cryptographic SHA-256 Event Chain ]
+   `-- Webhook Signature Verification + Triple-Binding Validation
+         |
+         v
+[ 5. Tamper-Evident Append-Only Cryptographic Audit Ledger ]
+   `-- Cryptographically Chained SHA-256 Event Stream
 ```
 
 ---
 
-## Key Architecture Pillars
+## Key Architectural Principles
 
-### 1. Atomic Reservation + Compensating Payment Workflow
+### 1. AI Never Authorizes Money
+The generative model (Google Gemini) is strictly limited to extracting structured spending policy parameters (spending ceiling, product category, allowed merchants, quantity limits). All allow, review, or deny decisions are executed by a zero-dependency deterministic rule engine. Policy values are hard-clamped at the boundary (amount ceiling <= INR 1,00,000; session cap <= INR 10,00,000) so no synthesized instruction can grant unbounded financial authority.
 
-Reserve Pay uses an **Atomic Local Reservation + Compensating Payment Workflow**:
+### 2. Atomic Local Reservation and Zero Overspend
+Every transaction must acquire a local atomic lock on `heldPaise` before any external payment gateway API is contacted:
+- PostgreSQL: Executed under `SERIALIZABLE` transaction isolation with row-level locks (`SELECT ... FOR UPDATE`) on the agent's reserve state record.
+- SQLite: Executed within `BEGIN IMMEDIATE` transactions to prevent dirty reads and write races.
+- Token Bucket Layer: Ephemeral rate coordination powered by atomic Redis/Upstash Lua scripts (or in-memory token bucket) to absorb high-velocity denial-of-service attempts before touching persistent database storage.
 
-1. **Local Atomic Lock**: SQLite `BEGIN IMMEDIATE` transaction or PostgreSQL `SERIALIZABLE` isolation with `SELECT ... FOR UPDATE` atomically verifies remaining session budget and locks the funds into `heldPaise`.
-2. **Side Effect Execution**: The Razorpay order is initiated with a deterministic internal receipt reference (`rcpt_...` ≤ 40 chars).
-3. **3-Way Gateway Outcome Handling**:
-   - `SUCCESS`: Transaction transitions to `order_created` → captured via webhook.
-   - `DEFINITE_FAILURE`: Instant local compensation (`heldPaise` released, zero funds leaked).
-   - `UNKNOWN_OUTCOME` (Network Timeout / Gateway Drop): Flagged as `order_creation_unknown` → picked up by the background reconciler.
+### 3. Three-Way Gateway Outcome Handling
+External payment calls have three distinct execution states:
+1. Success: Razorpay order ID is bound to the local reservation and recorded in the cryptographic ledger.
+2. Definite Failure: The local reservation is released immediately, unlocking funds with zero leakage.
+3. Unknown Outcome (Network Timeout / Gateway Drop): The reservation is flagged as `order_creation_unknown`. A dedicated background reconciler polls the payment gateway to locate or safely release the held funds.
 
-### 2. Multi-Layer Prompt Injection & Jailbreak Defense
+### 4. Tamper-Evident SHA-256 Ledger
+Every financial event (`RESERVATION_CREATED`, `ORDER_ATTACHED`, `ORDER_UNKNOWN_FLAGGED`, `ORDER_RECONCILED`, `PAYMENT_CAPTURED`, `RESERVATION_RELEASED`, `RESERVATION_EXPIRED`) is logged to an immutable append-only ledger. Each record is cryptographically linked:
 
-- Zero-width space and invisible Unicode character stripping.
-- Base64, Hex, and URL-encoded payload decoding before inspection.
-- Leetspeak unmasking (`1gn0r3` → `ignore`, `byp4ss` → `bypass`).
-- Strict schema enforcement via Google Gemini structured JSON generation.
-- Hardcoded ceiling clamps (`amountCeiling ≤ ₹1,00,000`, `sessionCap ≤ ₹10,00,000`) preventing any synthesized policy from granting unbounded financial access.
+```
+Hash_N = SHA-256(id : transactionId : eventType : timestamp : payloadHash : sequenceNum : prevHash_{N-1})
+```
 
-### 3. Tamper-Evident Append-Only Cryptographic Ledger
+Any modification, truncation, or reordering of historic rows invalidates downstream hashes, detectable via `verifyLedgerIntegrity()`.
 
-- Every state transition (`RESERVATION_CREATED`, `ORDER_ATTACHED`, `PAYMENT_CAPTURED`, `RESERVATION_RELEASED`, `PAYMENT_REFUNDED`, `PAYMENT_DISPUTED`) is logged to an immutable `ledger_events` table.
-- Each event is cryptographically chained:
+### 5. Multi-Layer Prompt Injection and Jailbreak Sanitization
+Incoming agent prompts pass through a defensive filter prior to policy parsing:
+- Stripping zero-width characters, invisible unicode, and control characters.
+- Decoding obfuscated URL encoding, hexadecimal escapes, and base64 layers.
+- Neutralizing leetspeak and common delimiter injection strategies.
+- Structural XML isolation to separate system instructions from untrusted user payloads.
+- Multi-lingual keyword filters for English, Hindi, Hinglish, and Spanish jailbreak patterns.
 
-  ```
-  Hash_N = SHA-256(id : transactionId : eventType : timestamp : payloadHash : sequenceNum : prevHash_{N-1})
-  ```
+---
 
-- State updates on mutable transaction rows do not mutate historic ledger records, ensuring a tamper-evident, append-only cryptographic event history.
-- `verifyLedgerIntegrity()` recalculates and checks every hash in the chain.
+## System Dashboard Panels
 
-### 4. Zero Client-Side Credentials
+The interactive control dashboard (`/dashboard`) provides operational controls and real-time observability:
 
-- The browser dashboard never holds or stores administrative keys.
-- Authentication supports **API keys**, **HttpOnly session cookies with JWT** (HS256), and **HMAC-SHA256 request signatures**, with role-based access control (`admin`, `agent`, `demo_user`).
+1. Agent Commerce Flow (Panel 01): Interactive end-to-end purchasing pipeline. Natural language intent is parsed into policy, matched against catalog products, evaluated through the guardrail, reserved atomically, and dispatched to Razorpay.
+2. Real-Time Reserve & Ledger State (Panel 02): Live visualization of total budget, held reservations, settled payments, available balance, and verified cryptographic hash integrity.
+3. Policy Rules Engine (Panel 03): Active policy rules displaying amount ceiling, merchant mode, allowed vendors, category, and session caps.
+4. Adversarial Attack Suite (Panel 04): One-click execution of 8 security test scenarios against real backend logic.
+5. Model Context Protocol Integration (Panel 05): Live inspector for MCP client requests (`reserve_check_budget`, `reserve_request_purchase`, `reserve_explain_policy`).
+6. Background Reconciler (Panel 06): Automated monitoring for stalled, dropped, or timed-out gateway calls with automated resolution.
+7. Concurrency Attack Suite (Panel 07): High-load benchmark launching 1,000 parallel requests against the atomic reservation lock with real-time stream logging and interactive filtering.
+8. Idempotency Replay (Panel 08): Replay attack simulator testing duplicate prevention via client tokens and payload hashing.
+9. Manual Simulator and Policy Tools (Panel 09): Administrative utilities to update policies, test custom transaction payloads, and inspect raw ledger events.
+
+---
+
+## Adversarial Attack Scenarios
+
+| Scenario | Attack Vector | Expected Enforcement |
+|---|---|---|
+| 01. Amount Overflow | Request exceeds single transaction limit | DENIED: Amount ceiling violation |
+| 02. Merchant Violation | Request targeting unapproved vendor | DENIED: Merchant allowlist restriction |
+| 03. Category Violation | Intent ordering prohibited MCC / category | DENIED: Category mismatch |
+| 04. Quantity Anomaly | Bulk order exceeding reasonable quantities | DENIED or REVIEW: Quantity anomaly trigger |
+| 05. Prompt Injection | Adversarial payload attempting to override limits | SAFE: Hard safety clamping enforced |
+| 06. Idempotency Replay | Duplicate purchase attempts with identical key | DEDUPLICATED: Cached response returned |
+| 07. Race Condition | Concurrent threads competing for remaining budget | SAFE CONCURRENCY: Exactly zero overspend |
+| 08. Gateway Timeout | Gateway connection dropped during order creation | RECONCILED: Stalled reservation released |
+
+---
+
+## Model Context Protocol (MCP) Server
+
+The repository includes a native Model Context Protocol server located in `backend/mcp-server/`. It can be integrated into Cursor, Claude Desktop, or custom agent frameworks.
+
+### Configuration (`claude_desktop_config.json` or Cursor MCP settings)
+
+```json
+{
+  "mcpServers": {
+    "reserve-pay": {
+      "command": "npx",
+      "args": ["tsx", "path/to/backend/mcp-server/index.ts"],
+      "env": {
+        "API_BASE_URL": "http://localhost:3000",
+        "AGENT_API_KEY": "agent_api_key_default"
+      }
+    }
+  }
+}
+```
+
+### Exposed Tools
+
+- `reserve_check_budget`: Retrieves active policy constraints, available reserve balance, held funds, and settled spend for an agent ID.
+- `reserve_request_purchase`: Evaluates and executes a product purchase through the deterministic guardrail, locking funds and creating a payment gateway order.
+- `reserve_explain_policy`: Produces a natural-language breakdown of active spending rules, merchant allowlists, and category restrictions.
+
+---
+
+## Verification Matrix
+
+| Subsystem | Production / Live Mode | Development / Fallback Mode |
+|---|---|---|
+| AI Intent Parsing | Live Google Gemini Flash API call | Deterministic regex / heuristic fallback |
+| Policy Decision Engine | Fully deterministic TypeScript rule engine | Fully deterministic TypeScript rule engine |
+| Atomic Fund Reservation | PostgreSQL SERIALIZABLE with row-level locks | SQLite WAL mode with BEGIN IMMEDIATE |
+| Gateway Order Creation | Real Razorpay Orders API | Mock gateway with deterministic receipt generation |
+| Webhook Verification | HMAC-SHA256 signature verification | HMAC-SHA256 signature verification |
+| Event Audit Trail | SHA-256 append-only cryptographic hash chain | SHA-256 append-only cryptographic hash chain |
+| Concurrency Control | Distributed Redis Lua token bucket + DB locks | In-memory token bucket + local DB locks |
+| Background Reconciler | Remote Razorpay API reconciliation | Local ledger state reconciliation |
 
 ---
 
@@ -102,98 +174,82 @@ Reserve Pay uses an **Atomic Local Reservation + Compensating Payment Workflow**
 
 - Node.js 18.0.0 or higher
 - npm 9.0.0 or higher
-- Optional: PostgreSQL/Supabase for production storage (SQLite used by default)
-- Optional: Vercel KV (Upstash) or a plain Redis instance for the distributed token bucket — falls back to in-memory if not configured
+- Optional: PostgreSQL / Supabase connection (SQLite is used automatically if `DATABASE_URL` is omitted)
+- Optional: Redis / Upstash connection (In-memory token bucket is used automatically if Redis credentials are omitted)
 
-### Environment Setup
-
-Create a `.env.local` file in the `backend/` directory (see `.env.example` for all variables):
+### Installation
 
 ```bash
-GEMINI_API_KEY=your_google_gemini_api_key
-RAZORPAY_KEY_ID=rzp_test_your_key_id
-RAZORPAY_KEY_SECRET=your_razorpay_key_secret
-RAZORPAY_WEBHOOK_SECRET=your_webhook_secret_here
-NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_your_key_id
-ADMIN_API_KEY=your_secure_admin_api_key
-AGENT_API_KEY=your_secure_agent_api_key
-JWT_SECRET=your_session_jwt_secret_min_32_chars
+# Clone the repository
+git clone https://github.com/v3cord/reserve-pay-guardrail.git
+cd reserve-pay-guardrail/backend
+
+# Install dependencies
+npm install
+
+# Configure environment variables
+cp .env.example .env.local
 ```
 
-The system runs fully in mock mode without real Razorpay or Gemini credentials — mock mode is clearly labeled in the UI.
+### Environment Configuration
 
-### Running Locally
+Configure `backend/.env.local` according to your deployment target:
 
 ```bash
-cd backend
-npm install
+# AI Intent Parser (Optional - falls back to deterministic parsing if omitted)
+GEMINI_API_KEY=your_gemini_api_key
+
+# Payment Gateway (Optional - falls back to mock mode if omitted)
+RAZORPAY_KEY_ID=rzp_test_your_key_id
+RAZORPAY_KEY_SECRET=your_key_secret
+RAZORPAY_WEBHOOK_SECRET=your_webhook_secret
+NEXT_PUBLIC_RAZORPAY_KEY_ID=rzp_test_your_key_id
+
+# Database Configuration (Optional - uses SQLite if omitted)
+DATABASE_URL=postgresql://user:password@host:6543/postgres
+
+# API Security and Authentication
+ADMIN_API_KEY=admin_api_key_default
+AGENT_API_KEY=agent_api_key_default
+AGENT_HMAC_SECRET=agent_hmac_secret_default
+JWT_SECRET=guardrail_jwt_secret_default_key_12345
+
+# Distributed Token Bucket (Optional - uses in-memory bucket if omitted)
+KV_REST_API_URL=your_upstash_rest_url
+KV_REST_API_TOKEN=your_upstash_rest_token
+REDIS_URL=redis://localhost:6379
+```
+
+### Starting the Application
+
+```bash
+# Start the Next.js development server
 npm run dev
 ```
 
-Visit `http://localhost:3000/dashboard` to launch the interactive controller dashboard.
+Navigate to `http://localhost:3000/dashboard` in your browser.
 
 ---
 
-## Running Tests & Benchmarks
+## Testing and Benchmarks
 
 ```bash
-# Run all tests (policy engine, catalog, integration, concurrency, idempotency, failures, webhooks)
+# Execute unit and integration tests
 npm test
 
-# Run 1,000-request concurrency stress benchmark
+# Run the 1,000-request parallel concurrency stress benchmark
 npx tsx tests/benchmark-concurrency.ts
 
-# Run AI intent & adversarial injection benchmark
+# Run the AI intent and prompt injection benchmark
 npx tsx tests/benchmark-ai.ts
 
-# Full CI gate
-bash scripts/ci-gate.sh
+# Execute type check
+npx tsc --noEmit
 ```
-
----
-
-## What the Tests Verify
-
-| Test Suite | File | What It Covers |
-|---|---|---|
-| Policy engine rules | `tests/policyEngine.test.ts` | All guardrail rules: merchant, category, MCC, ceiling, session cap, quantity |
-| Store & Atomic Reservation state machine | `lib/__tests__/store.test.ts` | Reserve → capture → release transitions, hash chain, concurrency |
-| Concurrency control | `tests/concurrency.test.ts` | TOCTOU safety under parallel requests |
-| Idempotency | `tests/idempotency.test.ts` | Duplicate request deduplication |
-| Webhook security | `tests/webhookSecurity.test.ts` | HMAC-SHA256 signature verification |
-| Network timeout reconciliation | `tests/networkTimeoutReconciliation.test.ts` | `order_creation_unknown` → reconcile → release |
-| Guard check unit tests | `lib/__tests__/guardCheck.test.ts` | Rule engine in isolation |
-| Auth | `lib/__tests__/auth.test.ts` | API key, JWT, and HMAC auth |
-
----
-
-## Model Context Protocol (MCP) Integration
-
-The repository includes an MCP server (`backend/mcp-server/`) exposing tools for Claude Desktop, Cursor, and custom agent runtimes:
-
-- `reserve_check_budget`: Returns real-time available budget, held funds, and active policy for an agent.
-- `reserve_request_purchase`: Evaluates and atomically executes a catalog purchase through the guardrail with Razorpay order creation.
-- `reserve_explain_policy`: Returns a plain-language explanation of spending restrictions and allowed vendors.
-
----
-
-## What Is Real vs Simulated
-
-| Feature | Status |
-|---------|--------|
-| Gemini intent parsing (when API key set) | ✅ Real Gemini API call |
-| Deterministic guardrail policy enforcement | ✅ Rule engine — no AI involvement |
-| Atomic fund reservation | ✅ SQLite WAL / PostgreSQL SERIALIZABLE |
-| Razorpay order creation (live keys) | ✅ Real Razorpay API |
-| Razorpay order creation (no keys) | ⚠️ Mock — labeled in UI |
-| Webhook HMAC-SHA256 verification | ✅ Real |
-| Ledger SHA-256 hash chain | ✅ Real |
-| Concurrency safety | ✅ Verified via test suite |
-| Token bucket (Vercel KV / Upstash / REDIS_URL set) | ✅ Distributed atomic Lua acquire |
-| Token bucket (no Redis env vars set) | ⚠️ In-memory fallback |
 
 ---
 
 ## License
 
-MIT License · Built for Autonomous AI Commerce.
+Distributed under the MIT License. See `LICENSE` for details.
+
