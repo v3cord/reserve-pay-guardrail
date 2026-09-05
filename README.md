@@ -60,7 +60,7 @@ Reserve Pay Guardrail is a deterministic financial policy engine that sits betwe
 ## Key Architectural Principles
 
 ### 1. AI Never Authorizes Money
-The generative model (Google Gemini) is strictly limited to extracting structured spending policy parameters (spending ceiling, product category, allowed merchants, quantity limits). All allow, review, or deny decisions are executed by a zero-dependency deterministic rule engine. Policy values are hard-clamped at the boundary (amount ceiling <= INR 1,00,000; session cap <= INR 10,00,000) so no synthesized instruction can grant unbounded financial authority.
+The generative model (Google ) is strictly limited to extracting structured spending policy parameters (spending ceiling, product category, allowed merchants, quantity limits). All allow, review, or deny decisions are executed by a zero-dependency deterministic rule engine. Policy values are hard-clamped at the boundary (amount ceiling <= INR 1,00,000; session cap <= INR 10,00,000) so no synthesized instruction can grant unbounded financial authority.
 
 ### 2. Atomic Local Reservation and Zero Overspend
 Every transaction must acquire a local atomic lock on `heldPaise` before any external payment gateway API is contacted:

@@ -102,7 +102,7 @@ const STAGES: ArchitectureStage[] = [
 const SUBSYSTEM_MATRIX = [
   {
     subsystem: 'AI Intent Parsing',
-    production: 'Live Google Gemini 2.5 Flash API',
+    production: 'Live Google Gemini 3.6 Flash API',
     fallback: 'Deterministic regex / keyword fallback',
     guarantee: 'XML structural envelope, hard ceiling <= INR 1L',
   },
